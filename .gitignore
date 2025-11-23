@@ -1,0 +1,31 @@
+# Python 가상 환경
+.venv/
+venv/
+*/.venv/
+
+# Python 캐시 파일
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# IDE 및 에디터 설정
+.vscode/
+.idea/
+
+# 데이터 파일 (용량이 크므로 Git으로 관리하지 않는 것을 권장)
+data/raw/
+data/processed/
+
+# 다운로드한 도구 (압축 파일)
+tools/ffmpeg/*.zip
+
+# 임시 파일
+tempCodeRunnerFile.py
+
+# 쿠키 파일 (개인 정보 포함)
+*.txt
+
+# OS 특정 파일
+.DS_Store
+Thumbs.db
