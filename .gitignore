@@ -25,6 +25,7 @@ tempCodeRunnerFile.py
 
 # 쿠키 파일 (개인 정보 포함)
 *.txt
+*.pptx
 
 # OS 특정 파일
 .DS_Store
