@@ -16,7 +16,9 @@ end_time = 35.0    #초 단위
 target_instruments = ['vocals', 'drums']  #사용자가 선택한 악기들
 
 #---------------------------------------
-
+''' 오디오를 로드,시작시간과 종료시간에 맞게 자르기(오디오경로, 시작시간, 종료시간) + Mel 스펙토그램 계산 함수
+    
+'''
 #오디오를 로드,시작시간과 종료시간에 맞게 자르기(오디오경로, 시작시간, 종료시간)
 def audio_load_and_crop(audio_path, start_time, end_time):
     y, sr = librosa.load(audio_path, sr=44100)
@@ -86,7 +88,7 @@ def mel_spectrogram(
     mel_spec_db = torchaudio.transforms.AmplitudeToDB()(mel_spec)
     return mel_spec_db
 
-# 실제 분리 
+# 실제 분리 test code
 
 results, sr = separate_audio(
     audio_path=audio_path,
@@ -95,18 +97,18 @@ results, sr = separate_audio(
     target_instruments=target_instruments,
     start_time=start_time,
     end_time=end_time)
+# results = {'vocals': <텐서>, 'drums': <텐서>} 이런 형태
 
+print("--- Mel Spectrogram Conversion Results ---")
+for instrument, audio_tensor in results.items():
+    # 스테레오인 경우 모노로 변환 (채널이 2개 이상일 때)
+    if audio_tensor.dim() > 1 and audio_tensor.shape[0] > 1:
+        audio_tensor = torch.mean(audio_tensor, dim=0, keepdim=True)
 
+    # Mel 스펙토그램 계산
+    mel_result = mel_spectrogram(audio_tensor, sample_rate=sr)
+    
+    # 각 악기별로 결과 출력
+    print(f"Instrument: '{instrument}', Mel Spectrogram Shape: {mel_result.shape}")
 
-# If multi-channel, convert to mono by averaging channels, and move to CPU
-if vocals.dim() == 2:
-    # vocals shape: (channels, samples) -> convert to (1, samples)
-    audio_tensor = vocals.mean(dim=0, keepdim=True).cpu()
-else:
-    audio_tensor = vocals.cpu()
-
-
-mel_result = mel_spectrogram(audio_tensor, sample_rate=sr)
-
-# Mel 스펙토그램 텐서의 차원(shape)을 출력 ( 1x128x431)
-print(f"Mel Spectrogram Shape: {mel_result.shape}")
+print("-----------------------------------------")

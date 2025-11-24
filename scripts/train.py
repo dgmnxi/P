@@ -1,3 +1,17 @@
+'''
+트립렛 손실(Triplet Loss)을 사용하여 모델을 학습하는 스크립트입니다.
+data/processed 디렉토리에서 전처리된 멜 스펙토그램 데이터를 로드하고,
+앵커(anchor), 포지티브(positive), 네거티브(negative) 샘플을 생성하여 모델을 학습합니다.
+학습된 모델은 지정된 디렉토리에 저장됩니다.
+A: 현재 학습할려는 노래의 악기
+P: 같은 노래의 같은 악기 / 다른 구간
+N: 0.5의 확률로 1. 다른 노래의 같은 악기 2. 같은 악기, 다른 노래 (hard negative -> 같은 기타여도 통기타, 일렉기타 등을 구분할 수 있게 함)
+
+
+'''
+
+
+
 import argparse
 import os
 import torch
@@ -63,10 +77,25 @@ class TripletSpectrogramDataset(Dataset):
         positive_list = self.data_map[anchor_instrument][anchor_song]
         positive_path = random.choice([p for p in positive_list if p != anchor_path]) if len(positive_list) > 1 else anchor_path
 
-        # 3. Negative 샘플 선택 (다른 노래, 다른 악기)
-        negative_instrument = random.choice([i for i in self.instruments if i != anchor_instrument])
-        negative_song = random.choice(list(self.data_map[negative_instrument].keys()))
-        negative_path = random.choice(self.data_map[negative_instrument][negative_song])
+        # 3. Negative 샘플 선택 (0.5 확률로 다른 노래의 같은 악기 또는 같은 악기, 다른 노래)
+        if random.random() < 0.5:
+            # 1.아예 다른 악기 (기존 로직) - 악기 종류 구분 능력 유지
+            neg_inst = random.choice([i for i in self.instruments if i != anchor_instrument])
+            neg_song = random.choice(list(self.data_map[neg_inst].keys()))
+        else:
+            # 2. 같은 악기, 다른 노래 (Hard Negative)
+            neg_inst = anchor_instrument
+            # 현재 노래를 제외한 다른 노래 목록
+            other_songs = [s for s in self.data_map[neg_inst].keys() if s != anchor_song]
+            
+            if not other_songs: 
+                # 노래가 하나밖에 없으면 어쩔 수 없이 다른 악기 선택
+                neg_inst = random.choice([i for i in self.instruments if i != anchor_instrument])
+                neg_song = random.choice(list(self.data_map[neg_inst].keys()))
+            else:
+                neg_song = random.choice(other_songs)
+
+        negative_path = random.choice(self.data_map[neg_inst][neg_song])
 
         anchor = torch.load(anchor_path)
         positive = torch.load(positive_path)
