@@ -2,16 +2,20 @@
 
 This repo contains a minimal FastAPI service wrapping Demucs for music source separation. It supports CPU and GPU deployments and returns a ZIP of separated stems.
 
+
 ## Endpoints
-- `GET /healthz` – health check, returns Demucs version.
-- `POST /separate` – multipart upload with options; returns a ZIP of stems.
-  - form fields:
-    - `file`: audio file (mp3/wav/flac)
-    - `model` (default `htdemucs`)
-    - `device` (default `auto`, options: `auto|cpu|cuda`)
-    - `mp3` (default `true`)
-    - `two_stems` (optional, e.g., `vocals`)
-    - `overlap`, `segment` (optional floats)
+입력 : 오디오 파일, 악기 이름, 시작 시간, 종료 시간
+출력 : 유사한 음악 리스트 top_k = 5/ 각 항목은 다음과 같은 딕셔너리 형태
+            "status": "success",
+            "results": 
+                        {
+                            "id": result_id : int
+                            "distance": distance : float,
+                            "song_name": song_name : str,
+                            "instrument": instrument : str,
+                            "start_sec": start_sec: float,
+                            "end_sec": end_sec: float
+                        }
 
 ## Local run (Windows PowerShell)
 ```powershell
