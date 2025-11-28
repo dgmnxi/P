@@ -1,3 +1,8 @@
+'''
+ 오디오 분리 및 Mel Spectrogram 변환 기능을 제공합니다.
+ 
+ '''
+
 import librosa
 import numpy as np
 import torch
@@ -6,68 +11,7 @@ from demucs.apply import apply_model
 from demucs.pretrained import get_model
 from typing import Dict, List, Optional, Tuple
 
-# 백엔드에서 받는 정보들-----------------
-#오디오 경로 1. 유튜브에서 직접 가져올 수도, 또는 사용자 음원을 전송할 수 도 있음
-audio_path = "Besomorph - Running Cold.mp3"
-model_name = "htdemucs"
-device = "cuda"
-start_time = 30.0  #초 단위
-end_time = 35.0    #초 단위
-target_instruments = ['vocals', 'drums']  #사용자가 선택한 악기들
-
-#---------------------------------------
-''' 오디오를 로드,시작시간과 종료시간에 맞게 자르기(오디오경로, 시작시간, 종료시간) + Mel 스펙토그램 계산 함수
-    
-'''
-#오디오를 로드,시작시간과 종료시간에 맞게 자르기(오디오경로, 시작시간, 종료시간)
-def audio_load_and_crop(audio_path, start_time, end_time):
-    y, sr = librosa.load(audio_path, sr=44100)
-    start_sample = int(start_time * sr)
-    end_sample = int(end_time * sr)
-    y_segment = y[start_sample:end_sample]
-    return y_segment, sr
-
-# 사용자 요청 오디오 분리 / 오디오 경로,모델이름(optional),장치(optional),타겟 악기(list),시작시간,종료시간(optional)
-def separate_audio(
-    audio_path: str,
-    model_name: str = 'htdemucs',
-    device: str = 'cuda',
-    target_instruments: Optional[List[str]] = None,
-    start_time: float = None,
-    end_time: float = None,
-) -> Tuple[Dict[str, torch.Tensor], int]:
-
-    model = get_model(name=model_name)
-    model.to(device)
-    model.eval()
-
-    # Load audio using torchaudio
-    wav, sr = torchaudio.load(audio_path)
-    wav = wav.to(device)
-
-    # Demucs expects stereo or mono. Let's ensure input is at least 2D (channels, samples)
-    if wav.dim() == 1:
-        wav = wav.unsqueeze(0)
-
-    # Crop audio
-    if end_time > start_time:
-        start_frame = int(start_time * sr)
-        end_frame = int(end_time * sr)
-        wav = wav[..., start_frame:end_frame]
-
-    # Apply model - demucs expects a batch dimension, so add it
-    with torch.no_grad():
-        estimates = apply_model(model, wav.unsqueeze(0))[0]  # Take first item from batch
-
-    # Filter for target instruments
-    results = {}
-    for i, source_name in enumerate(model.sources):
-        if target_instruments is None or source_name in target_instruments:
-            results[source_name] = estimates[i].cpu()
-
-    return results, sr
-
-#mel 스펙토그램 계산 / 오디오텐서만 넘겨도 됨
+# --- Mel Spectrogram 변환 함수---
 def mel_spectrogram(
     audio_tensor: torch.Tensor,
     sample_rate: int = 44100,
@@ -75,40 +19,79 @@ def mel_spectrogram(
     n_fft: int = 2048,
     hop_length: int = 512,
 ) -> torch.Tensor:
-    """
-    Computes the Mel spectrogram of an audio tensor.
-    """
-    mel_spectrogram_transform = torchaudio.transforms.MelSpectrogram(
-        sample_rate=sample_rate,
-        n_fft=n_fft,
-        hop_length=hop_length,
-        n_mels=n_mels,
+    """오디오 텐서를 Mel Spectrogram으로 변환합니다."""
+    mel_transform = torchaudio.transforms.MelSpectrogram(
+        sample_rate=sample_rate, n_fft=n_fft, hop_length=hop_length, n_mels=n_mels
     )
-    mel_spec = mel_spectrogram_transform(audio_tensor)
+    mel_spec = mel_transform(audio_tensor)
     mel_spec_db = torchaudio.transforms.AmplitudeToDB()(mel_spec)
     return mel_spec_db
 
-# 실제 분리 test code
+# --- 오디오 분리 함수 ---
+def separate_audio(
+    audio_path: str,
+    model_name: str = 'htdemucs',
+    device: str = 'cuda',
+) -> Tuple[Dict[str, torch.Tensor], int]:
+    """오디오 파일에서 모든 악기를 분리합니다."""
+    model = get_model(name=model_name)
+    model.to(device)
+    model.eval()
 
-results, sr = separate_audio(
-    audio_path=audio_path,
-    model_name=model_name,
-    device=device,
-    target_instruments=target_instruments,
-    start_time=start_time,
-    end_time=end_time)
-# results = {'vocals': <텐서>, 'drums': <텐서>} 이런 형태
+    wav, sr = torchaudio.load(audio_path)
+    wav = wav.to(device)
+    if wav.dim() == 1:
+        wav = wav.unsqueeze(0)
 
-print("--- Mel Spectrogram Conversion Results ---")
-for instrument, audio_tensor in results.items():
-    # 스테레오인 경우 모노로 변환 (채널이 2개 이상일 때)
-    if audio_tensor.dim() > 1 and audio_tensor.shape[0] > 1:
-        audio_tensor = torch.mean(audio_tensor, dim=0, keepdim=True)
+    with torch.no_grad():
+        estimates = apply_model(model, wav.unsqueeze(0), overlap=0.5)[0]
 
-    # Mel 스펙토그램 계산
-    mel_result = mel_spectrogram(audio_tensor, sample_rate=sr)
-    
-    # 각 악기별로 결과 출력
-    print(f"Instrument: '{instrument}', Mel Spectrogram Shape: {mel_result.shape}")
+    results = {name: estimates[i].cpu() for i, name in enumerate(model.sources)}
+    return results, sr
 
-print("-----------------------------------------")
+
+
+# --- API 서버용 함수 (main.py에서 사용) ---
+# TODO:하나의 악기만 받을 수 있음 아직
+def extract_and_transform_frame(
+    audio_path: str,
+    instrument: str,
+    start_sec: float,
+    end_sec: float,
+    device: str = 'cuda'
+) -> Optional[torch.Tensor]:
+    """
+    오디오 파일의 특정 구간, 특정 악기를 추출하여 Mel Spectrogram으로 변환합니다.
+    """
+    try:
+        model = get_model(name='htdemucs')
+        model.to(device)
+        model.eval()
+
+        wav, sr = torchaudio.load(audio_path)
+        wav = wav.to(device)
+        if wav.dim() == 1:
+            wav = wav.unsqueeze(0)
+
+        # 오디오 자르기
+        start_frame = int(start_sec * sr)
+        end_frame = int(end_sec * sr)
+        wav_segment = wav[..., start_frame:end_frame]
+
+        # Demucs로 분리
+        with torch.no_grad():
+            estimates = apply_model(model, wav_segment.unsqueeze(0), overlap=0.5)[0]
+
+        # 원하는 악기 찾기
+        source_idx = model.sources.index(instrument)
+        instrument_wav = estimates[source_idx].cpu()
+
+        # 모노 변환 및 Mel Spectrogram 계산
+        if instrument_wav.dim() > 1:
+            instrument_wav = instrument_wav.mean(dim=0, keepdim=True)
+        
+        return mel_spectrogram(instrument_wav, sample_rate=sr)
+
+    except Exception as e:
+        print(f"Error in extract_and_transform_frame: {e}")
+        return None

@@ -1,3 +1,11 @@
+'''
+RessNet-18 모델을 기반으로 한 오디오 임베딩 추출기입니다.
+input = Mel Spectrogram (1x128x431) 512 hop length, 5초 Mel-Spectrogram 기준(training)
+output = 128-dim embedding vector
+
+'''
+
+
 import torch
 from torch import nn
 from typing import Optional, Callable, List, Type
@@ -134,7 +142,12 @@ def resnet18(**kwargs) -> ResNet:
     """Constructs a ResNet-18 model."""
     return ResNet(BasicBlock, [2, 2, 2, 2], **kwargs)
 
+#-------여기까지가 기본적인 ResNet-18 모델 정의 -------
+
 # 기학습된 파라미터를 통해 전이학습
+# 변형된 layer(conv1, fc)는 freeze_features 옵션에 따라 동결 여부 결정
+# conv1은 실제 서비스 환경에서 다양한 길이가 들어올 수 있으므로 변형한 layer
+# FC layer는 기존(1000 classes)에서 128-dim 임베딩 벡터로 변경
 def resnet18_transfer_learning(output_dim: int = 128, freeze_features: bool = True) -> ResNet:
 
     # 1. Load pretrained ResNet-18 model

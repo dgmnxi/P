@@ -13,7 +13,7 @@ __pycache__/
 .vscode/
 .idea/
 
-# 데이터 파일 (용량이 크므로 Git으로 관리하지 않는 것을 권장)
+# 데이터 파일 
 data/raw/
 data/processed/
 
@@ -23,10 +23,12 @@ tools/ffmpeg/*.zip
 # 임시 파일
 tempCodeRunnerFile.py
 
-# 쿠키 파일 (개인 정보 포함)
-*.txt
+# 쿠키 및 문서 파일 (개인 정보 포함)
+LICENSE.txt
 *.pptx
 
 # OS 특정 파일
 .DS_Store
 Thumbs.db
+
+#
