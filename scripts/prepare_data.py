@@ -15,13 +15,17 @@ from glob import glob
 import logging
 from tqdm import tqdm
 import sys
+import shutil
 
-# 프로젝트 루트를 경로에 추가하여 app 모듈을 임포트할 수 있도록 함
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-if project_root not in sys.path:
-    sys.path.append(project_root)
 
-# app.separator에서 필요한 함수들을 임포트
+# 절대 경로 참조
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, '..'))
+
+# 프로젝트 루트를 sys.path에 추가하여 app 모듈을 임포트
+if PROJECT_ROOT not in sys.path:
+    sys.path.append(PROJECT_ROOT)
+
 try:
     from app.separator import separate_audio, mel_spectrogram
 except ImportError as e:
@@ -29,34 +33,31 @@ except ImportError as e:
     print("Could not import from 'app.separator'. Make sure you are running this script from the project root directory.")
     sys.exit(1)
 
-
 # --- 로깅 설정 ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+# 5초, 44.1kHz, hop_length=512 기준으로 계산된 최종 스펙트로그램 너비
+TARGET_WIDTH = 431
+
+# 
 def process_and_save(audio_path, output_dir, segment_duration=5.0, device='cuda'):
     """
     하나의 오디오 파일을 처리하여 분리, 분할, Mel Spectrogram 변환 후 저장합니다.
+    모든 결과물의 크기를 동일하게 보장합니다.
     """
     try:
-        # 1. Demucs로 악기 분리 (전체 파일 대상)
-        separated_stems, sr = separate_audio(
-            audio_path=audio_path,
-            model_name='htdemucs',
-            device=device,
-            target_instruments=None
-        )
-        
+        separated_stems, sr = separate_audio(audio_path, device=device)
         original_filename = os.path.splitext(os.path.basename(audio_path))[0]
 
-        # 2. 각 악기(stem)별로 처리
         for instrument, tensor in separated_stems.items():
             num_samples_per_segment = int(segment_duration * sr)
             if tensor.dim() > 1:
-                tensor = tensor.mean(dim=0)
+                tensor = tensor.mean(dim=0) # 스테레오를 모노로 변환
 
             segments = list(tensor.split(num_samples_per_segment, dim=-1))
 
-            if segments and segments[-1].shape[-1] < num_samples_per_segment / 2:
+            # 마지막 세그먼트가 너무 짧으면 버리기.
+            if segments and segments[-1].shape[-1] < num_samples_per_segment:
                 segments.pop()
 
             if not segments:
@@ -65,43 +66,100 @@ def process_and_save(audio_path, output_dir, segment_duration=5.0, device='cuda'
             instrument_dir = os.path.join(output_dir, instrument)
             os.makedirs(instrument_dir, exist_ok=True)
 
+            '''
+            정확히 5초 단위로 잘리지 않는 현상 발견 > 보정 로직 추가
+            마지막 조각이 5초보다 길면 자르고, 짧으면 건너뜀
+            '''
             for i, seg in enumerate(segments):
+
+                if seg.shape[-1] > num_samples_per_segment:
+                    seg = seg[..., :num_samples_per_segment]
+                
+                # 길이가 5초보다 짧으면 무시합니다 (위에서 처리했지만, 안전장치).
+                if seg.shape[-1] < num_samples_per_segment:
+                    continue
+
                 mel_spec = mel_spectrogram(seg.unsqueeze(0), sample_rate=sr)
+
+                # 스펙트로그램의 너비가 TARGET_WIDTH와 다르면 보정합니다.
+                if mel_spec.shape[2] > TARGET_WIDTH:
+                    mel_spec = mel_spec[:, :, :TARGET_WIDTH]
+                elif mel_spec.shape[2] < TARGET_WIDTH:
+                    # 너비가 목표보다 작으면 학습에 문제를 일으키므로 저장하지 않습니다.
+                    tqdm.write(f"경고: '{original_filename}'의 {i}번째 조각이 목표 크기({TARGET_WIDTH})보다 작아 건너뜁니다. (크기: {mel_spec.shape[2]})")
+                    continue
+                
                 save_filename = f"{original_filename}_{i:03d}.pt"
                 save_path = os.path.join(instrument_dir, save_filename)
                 torch.save(mel_spec, save_path)
-
         return True, None
-
     except Exception as e:
-        logging.error(f"'{audio_path}' 처리 중 오류 발생: {e}", exc_info=True)
+        logging.error(f"'{os.path.basename(audio_path)}' 처리 중 오류 발생: {e}", exc_info=True)
         return False, str(e)
-
 
 def main():
     parser = argparse.ArgumentParser(description="오디오 파일을 전처리하여 학습용 데이터셋을 생성합니다.")
-    parser.add_argument('--input-dir', type=str, default="data/raw", help="처리할 원본 오디오 파일이 있는 디렉토리")
-    parser.add_argument('--output-dir', type=str, default="data/processed", help="처리된 Mel Spectrogram 텐서를 저장할 디렉토리")
+    # --- 경로 문제 해결을 위한 수정: 기본 경로를 절대 경로로 설정 ---
+    parser.add_argument('--input-dir', type=str, default=os.path.join(PROJECT_ROOT, "data/raw"), help="처리할 원본 오디오 파일이 있는 디렉토리")
+    parser.add_argument('--output-dir', type=str, default=os.path.join(PROJECT_ROOT, "data/processed"), help="처리된 Mel Spectrogram 텐서를 저장할 디렉토리")
     parser.add_argument('--segment-duration', type=float, default=5.0, help="오디오를 분할할 시간 (초 단위)")
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu', help="PyTorch 장치 (cuda 또는 cpu)")
     args = parser.parse_args()
 
-    logging.info(f"입력 디렉토리: {args.input_dir}, 출력 디렉토리: {args.output_dir}")
-    
+    logging.info(f"입력 디렉토리: {args.input_dir}")
+    logging.info(f"출력 디렉토리: {args.output_dir}")
+
     audio_files = []
-    for ext in ["*.mp3", "*.wav", "*.flac"]:
-        audio_files.extend(glob(os.path.join(args.input_dir, ext)))
+    supported_exts = ["**/*.mp3", "**/*.wav", "**/*.flac", "**/*.m4a", "**/*.ogg"]
+    for ext in supported_exts:
+        # recursive=True를 사용하여 하위 폴더까지 모두 검색
+        pattern = os.path.join(args.input_dir, ext)
+        audio_files.extend(glob(pattern, recursive=True))
+
+    # 중복 제거
+    audio_files = sorted(list(set(audio_files)))
 
     if not audio_files:
-        logging.warning(f"'{args.input_dir}'에서 오디오 파일을 찾을 수 없습니다.")
+        logging.warning(f"'{args.input_dir}'에서 오디오 파일을 찾을 수 없습니다. 파일이 있는지, 확장자가 올바른지 확인해주세요.")
         return
 
     logging.info(f"총 {len(audio_files)}개의 오디오 파일을 처리합니다.")
     
-    for audio_file in tqdm(audio_files, desc="오디오 파일 처리 중"):
-        process_and_save(audio_file, args.output_dir, args.segment_duration, args.device)
+    # --- 중복 처리 확인 > 중복 시 skip ---
+    processed_files_map = {}
+    for instrument in ["bass", "drums", "other", "vocals"]:
+        instrument_dir = os.path.join(args.output_dir, instrument)
+        if os.path.exists(instrument_dir):
+            # 예: "song1_001.pt" -> "song1"
+            processed_files_map[instrument] = { "_".join(f.split('_')[:-1]) for f in os.listdir(instrument_dir) }
+
+    success_count = 0
+    fail_count = 0
+    # tqdm을 사용하여 파일 처리 진행 상황을 표시합니다.
+    with tqdm(total=len(audio_files), desc="오디오 파일 처리 중") as pbar:
+        for file_path in audio_files:
+            original_filename = os.path.splitext(os.path.basename(file_path))[0]
+            
+            # --- 추가: 모든 악기에 대해 이미 처리되었는지 확인 ---
+            is_already_processed = True
+            # bass, drums, other 악기가 모두 처리되었는지 확인
+            for instrument in ["bass", "drums", "other"]: 
+                if instrument not in processed_files_map or original_filename not in processed_files_map[instrument]:
+                    is_already_processed = False
+                    break
+            
+            if is_already_processed:
+                pbar.update(1)
+                tqdm.write(f"'{original_filename}'은(는) 이미 처리되었습니다. 건너뜁니다.")
+                continue
+
+            success, error_msg = process_and_save(file_path, args.output_dir, args.segment_duration, args.device)
+            if not success:
+                tqdm.write(f"오류: '{os.path.basename(file_path)}' 처리 실패 - {error_msg}")
+            pbar.update(1)
 
     logging.info("--- 전처리 완료 ---")
+    logging.info(f"성공: {success_count}개 파일, 실패: {fail_count}개 파일")
 
 if __name__ == '__main__':
     main()
