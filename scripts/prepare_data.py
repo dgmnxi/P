@@ -36,14 +36,16 @@ except ImportError as e:
 # --- 로깅 설정 ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+# --- 설정 ---
 # 5초, 44.1kHz, hop_length=512 기준으로 계산된 최종 스펙트로그램 너비
 TARGET_WIDTH = 431
+RMS_THRESHOLD = 1e-4  # 침묵으로 간주할 RMS 에너지 임계값 (이 값보다 작으면 저장 안 함)
 
-# 
+
 def process_and_save(audio_path, output_dir, segment_duration=5.0, device='cuda'):
     """
     하나의 오디오 파일을 처리하여 분리, 분할, Mel Spectrogram 변환 후 저장합니다.
-    모든 결과물의 크기를 동일하게 보장합니다.
+    모든 결과물의 크기를 동일하게 보장하고, 침묵 구간은 저장하지 않습니다.
     """
     try:
         separated_stems, sr = separate_audio(audio_path, device=device)
@@ -51,12 +53,14 @@ def process_and_save(audio_path, output_dir, segment_duration=5.0, device='cuda'
 
         for instrument, tensor in separated_stems.items():
             num_samples_per_segment = int(segment_duration * sr)
-            if tensor.dim() > 1:
-                tensor = tensor.mean(dim=0) # 스테레오를 모노로 변환
+            
+            # separate_audio가 스테레오를 반환하므로, 여기서 모노로 변환합니다.
+            if tensor.dim() > 1 and tensor.shape[0] == 2:
+                tensor = tensor.mean(dim=0) 
 
             segments = list(tensor.split(num_samples_per_segment, dim=-1))
 
-            # 마지막 세그먼트가 너무 짧으면 버리기.
+            # 마지막 세그먼트가 너무 짧으면 버리기
             if segments and segments[-1].shape[-1] < num_samples_per_segment:
                 segments.pop()
 
@@ -66,26 +70,27 @@ def process_and_save(audio_path, output_dir, segment_duration=5.0, device='cuda'
             instrument_dir = os.path.join(output_dir, instrument)
             os.makedirs(instrument_dir, exist_ok=True)
 
-            '''
-            정확히 5초 단위로 잘리지 않는 현상 발견 > 보정 로직 추가
-            마지막 조각이 5초보다 길면 자르고, 짧으면 건너뜀
-            '''
             for i, seg in enumerate(segments):
-
-                if seg.shape[-1] > num_samples_per_segment:
-                    seg = seg[..., :num_samples_per_segment]
-                
-                # 길이가 5초보다 짧으면 무시합니다 (위에서 처리했지만, 안전장치).
+                # 길이가 5초보다 짧으면 무시 (안전장치)
                 if seg.shape[-1] < num_samples_per_segment:
                     continue
+                
+                # --- 침묵 구간 제거 로직 ---
+                # RMS 에너지를 계산합니다.
+                rms = torch.sqrt(torch.mean(seg.pow(2)))
+                
+                # RMS 값이 임계값보다 낮으면 침묵으로 간주하고 건너뜁니다.
+                if rms < RMS_THRESHOLD:
+                    continue
+                # --- 로직 끝 ---
 
+                # unsqueeze(0)로 채널 차원 추가
                 mel_spec = mel_spectrogram(seg.unsqueeze(0), sample_rate=sr)
 
                 # 스펙트로그램의 너비가 TARGET_WIDTH와 다르면 보정합니다.
                 if mel_spec.shape[2] > TARGET_WIDTH:
                     mel_spec = mel_spec[:, :, :TARGET_WIDTH]
                 elif mel_spec.shape[2] < TARGET_WIDTH:
-                    # 너비가 목표보다 작으면 학습에 문제를 일으키므로 저장하지 않습니다.
                     tqdm.write(f"경고: '{original_filename}'의 {i}번째 조각이 목표 크기({TARGET_WIDTH})보다 작아 건너뜁니다. (크기: {mel_spec.shape[2]})")
                     continue
                 
