@@ -2,8 +2,6 @@
 Faiss를 이용한 벡터 검색 엔진 구현
 
 '''
-
-# app/search.py
 import faiss
 import json
 import numpy as np
@@ -27,19 +25,22 @@ class VectorSearchEngine:
         if query_vector.ndim == 1:
             query_vector = np.expand_dims(query_vector, axis=0)
         
-        # Faiss 검색 수행
-        distances, ids = self.index.search(query_vector, top_k)
+        # L2 정규화 추가
+        faiss.normalize_L2(query_vector)
+
+        # Faiss 검색 수행 (distances는 코사인 유사도가 됨)
+        similarities, ids = self.index.search(query_vector, top_k)
         
         results = []
         for i in range(top_k):
             result_id = str(ids[0][i])
-            distance = float(distances[0][i])
+            similarity = float(similarities[0][i])
             
             if result_id in self.metadata:
                 meta = self.metadata[result_id]
                 results.append({
                     "id": result_id,
-                    "distance": distance,
+                    "similarity": similarity, # 'distance' 대신 'similarity' 사용
                     "song_name": meta.get("song_name"),
                     "instrument": meta.get("instrument"),
                     "start_sec": meta.get("start_sec"),

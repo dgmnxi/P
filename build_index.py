@@ -21,6 +21,8 @@ data/raw에 있는 오디오 파일들을
             },
 '''
 
+# build_index.py
+
 import os
 import torch
 import faiss
@@ -28,104 +30,117 @@ import json
 import numpy as np
 from glob import glob
 from tqdm import tqdm
+import sys
 
-# --- 수정된 부분: model.py에서 함수를 직접 임포트 ---
+# --- 경로 설정 ---
+project_root = os.path.dirname(os.path.abspath(__file__))
+# 'app' 모듈을 찾기 위해 프로젝트 루트를 sys.path에 추가합니다.
+if project_root not in sys.path:
+    sys.path.append(project_root)
+
 from app.model import resnet18_transfer_learning
-from app.separator import separate_audio, mel_spectrogram
 
 # --- 설정 ---
-RAW_DATA_DIR = "data/raw"
-MODEL_PATH = "models/audio_resnet_best.pth"
-INDEX_DIR = "indexes"
+# '..'를 모두 제거하여 모든 경로가 프로젝트 폴더 내에서 결정되도록 합니다.
+PROCESSED_DATA_DIR = os.path.join(project_root, "data/processed")
+MODEL_PATH = os.path.join(project_root, "models/best_model.pth")
+INDEX_DIR = os.path.join(project_root, "indexes")
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-BATCH_SIZE = 32
+BATCH_SIZE = 128
 EMBEDDING_DIM = 128
 
-def build_index():
+def build_index_from_processed():
     os.makedirs(INDEX_DIR, exist_ok=True)
     
+    # 1. 모델 로드
     print(f"Loading Model from {MODEL_PATH}...")
-    # --- 수정된 부분: 클래스 생성 대신 함수 호출 ---
-    model = resnet18_transfer_learning(output_dim=EMBEDDING_DIM, freeze_features=False).to(DEVICE)
-    
-    if os.path.exists(MODEL_PATH):
-        model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
-    else:
-        print(f"Warning: Model weights not found at {MODEL_PATH}. Using initial transfer learning weights for indexing.")
+    model = resnet18_transfer_learning().to(DEVICE)
+    if not os.path.exists(MODEL_PATH):
+        print(f"FATAL: Model weights not found at {MODEL_PATH}. Please run 'scripts/train.py' first.")
+        return
+    model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
     model.eval()
 
+    # 2. 처리된 .pt 파일 목록 가져오기
+    pt_files = glob(os.path.join(PROCESSED_DATA_DIR, '**', '*.pt'), recursive=True)
+    if not pt_files:
+        print(f"FATAL: No .pt files found in '{PROCESSED_DATA_DIR}'. Please run 'scripts/prepare_data.py' first.")
+        return
+    
+    print(f"Found {len(pt_files)} processed chunks. Starting indexing process...")
+
+    # 3. 인덱스와 메타데이터 초기화
     index = faiss.IndexFlatL2(EMBEDDING_DIM)
     metadata = {}
     current_id = 0
-
-    audio_files = glob(os.path.join(RAW_DATA_DIR, "*.*"))
-    audio_files = [f for f in audio_files if f.lower().endswith(('.mp3', '.wav', '.flac'))]
     
-    print(f"Found {len(audio_files)} songs. Starting indexing process...")
+    batch_specs = []
+    batch_files_info = []
 
-    for audio_path in tqdm(audio_files, desc="Processing Songs"):
-        song_name = os.path.splitext(os.path.basename(audio_path))[0]
-        
-        try:
-            stems, sr = separate_audio(audio_path, device=DEVICE)
-            
-            for instrument, waveform in stems.items():
-                if waveform.dim() > 1:
-                    waveform = waveform.mean(dim=0)
+    with torch.no_grad():
+        for pt_path in tqdm(pt_files, desc="Indexing Chunks"):
+            try:
+                # 파일 경로에서 정보 파싱
+                parts = pt_path.replace('\\', '/').split('/')
+                instrument = parts[-2]
+                filename = parts[-1]
+                song_name = '_'.join(filename.split('_')[:-1])
+                chunk_id = int(filename.split('_')[-1].split('.')[0])
 
-                samples_per_segment = int(5.0 * sr)
-                total_samples = waveform.shape[-1]
+                # 스펙트로그램 텐서 로드
+                spec = torch.load(pt_path, map_location=DEVICE)
                 
-                batch_specs = []
-                batch_meta = []
+                # --- ★★★★★ 최종 수정 ★★★★★ ---
+                # 모든 텐서가 (1, 128, 431) 모양이라고 가정하고,
+                # 배치에 추가하기 전에 unsqueeze(0)를 호출하여 (1, 1, 128, 431)로 만듭니다.
+                if spec.shape == (1, 128, 431):
+                    spec = spec.unsqueeze(0) # (1, 1, 128, 431)로 만듦
+                else:
+                    tqdm.write(f"Warning: Skipping {pt_path} due to unexpected shape {spec.shape}")
+                    continue
+                
+                batch_specs.append(spec)
+                
+                # 메타데이터 정보 저장
+                batch_files_info.append({
+                    "song_name": song_name,
+                    "instrument": instrument,
+                    "start_sec": round(chunk_id * 5.0, 2),
+                    "end_sec": round((chunk_id + 1) * 5.0, 2)
+                })
 
-                for start_idx in range(0, total_samples, samples_per_segment):
-                    end_idx = start_idx + samples_per_segment
-                    if end_idx > total_samples: break
-
-                    segment = waveform[start_idx:end_idx]
-                    spec = mel_spectrogram(segment.unsqueeze(0), sample_rate=sr)
-                    batch_specs.append(spec)
-                    
-                    batch_meta.append({
-                        "song_name": song_name,
-                        "instrument": instrument,
-                        "start_sec": start_idx / sr,
-                        "end_sec": end_idx / sr
-                    })
-
-                    # 배치 사이즈가 차면 처리
-                    if len(batch_specs) >= BATCH_SIZE:
-                        batch_tensor = torch.cat(batch_specs).to(DEVICE)
-                        with torch.no_grad():
-                            embeddings = model(batch_tensor).cpu().numpy()
-                        
-                        index.add(embeddings)
-                        for i in range(len(embeddings)):
-                            metadata[str(current_id)] = batch_meta[i]
-                            current_id += 1
-                        
-                        batch_specs, batch_meta = [], []
-
-                # 남은 배치 처리
-                if batch_specs:
-                    batch_tensor = torch.cat(batch_specs).to(DEVICE)
-                    with torch.no_grad():
-                        embeddings = model(batch_tensor).cpu().numpy()
+                # 배치가 차면 처리
+                if len(batch_specs) >= BATCH_SIZE:
+                    # (1, 1, 128, 431) 모양의 텐서 리스트를 (BATCH_SIZE, 1, 128, 431) 모양으로 합침
+                    batch_tensor = torch.cat(batch_specs, dim=0)
+                    embeddings = model(batch_tensor).cpu().numpy()
                     
                     index.add(embeddings)
-                    for i in range(len(embeddings)):
-                        metadata[str(current_id)] = batch_meta[i]
+                    for info in batch_files_info:
+                        metadata[str(current_id)] = info
                         current_id += 1
+                    
+                    batch_specs, batch_files_info = [], []
 
-        except Exception as e:
-            print(f"Error processing {song_name}: {e}")
-            continue
+            except Exception as e:
+                print(f"Error processing {pt_path}: {e}")
+                continue
 
+        # 남은 배치 처리
+        if batch_specs:
+            batch_tensor = torch.cat(batch_specs, dim=0)
+            embeddings = model(batch_tensor).cpu().numpy()
+            
+            index.add(embeddings)
+            for info in batch_files_info:
+                metadata[str(current_id)] = info
+                current_id += 1
+
+    # 4. 최종 파일 저장
     index_path = os.path.join(INDEX_DIR, "timbre.index")
     meta_path = os.path.join(INDEX_DIR, "metadata.json")
     
-    print(f"Saving Index to {index_path}...")
+    print(f"\nSaving Index with {index.ntotal} vectors to {index_path}...")
     faiss.write_index(index, index_path)
     
     print(f"Saving Metadata to {meta_path}...")
@@ -135,4 +150,4 @@ def build_index():
     print("--- Indexing Complete! ---")
 
 if __name__ == "__main__":
-    build_index()
+    build_index_from_processed()

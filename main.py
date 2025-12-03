@@ -8,7 +8,7 @@ import numpy as np
 
 # 우리가 만든 모듈들 임포트
 from app.model import resnet18_transfer_learning
-from app.separator import extract_and_transform_frame
+from app.separator import separate_audio, mel_spectrogram # mel_spectrogram 추가
 from app.search import VectorSearchEngine
 
 app = FastAPI(title="Music Timbre Search AI Server")
@@ -17,11 +17,7 @@ app = FastAPI(title="Music Timbre Search AI Server")
 MODEL = None
 SEARCH_ENGINE = None
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-
-# 모델 학습 시 사용했던 입력 크기 (5초 분량의 Mel Spectrogram 프레임 수)
-# 이 값은 app/separator.py의 mel_spectrogram 설정에 따라 달라질 수 있습니다.
-# 44100 * 5 / 512 = 430.6 -> 431 프레임
-TRAIN_INPUT_FRAMES = 431 
+TARGET_WIDTH = 431 # 훈련 시 사용했던 스펙트로그램 너비
 
 @app.on_event("startup")
 async def load_resources():
@@ -29,14 +25,16 @@ async def load_resources():
     
     # 1. 모델 로드
     print("Loading AI Model...")
-    MODEL = resnet18_transfer_learning(output_dim=128, freeze_features=False).to(DEVICE)
+    MODEL = resnet18_transfer_learning().to(DEVICE)
     
-    model_path = "models/audio_resnet_best.pth"
+    # --- 수정: 모델 경로를 best_model.pth로 변경 ---
+    model_path = "models/best_model.pth"
     if os.path.exists(model_path):
         print(f"Loading weights from {model_path}")
         MODEL.load_state_dict(torch.load(model_path, map_location=DEVICE))
     else:
-        print(f"Warning: Model weights not found at {model_path}. Using initial transfer learning weights.")
+        # 이제 모델이 없으면 치명적인 오류로 간주
+        raise RuntimeError(f"FATAL: Model weights not found at {model_path}. Please run 'scripts/train.py' first.")
         
     MODEL.eval()
     
@@ -47,33 +45,16 @@ async def load_resources():
     if os.path.exists(index_path) and os.path.exists(metadata_path):
         SEARCH_ENGINE = VectorSearchEngine(index_path, metadata_path)
     else:
-        print("Warning: Index or metadata file not found. Search will fail.")
+        raise RuntimeError("FATAL: Index or metadata file not found. Please run 'scripts/build_index.py' first.")
 
-'''
-API 호출 부 
-입력 : 오디오 파일, 악기 이름, 시작 시간, 종료 시간
-출력 : 유사한 음악 리스트 top_k = 5/ 각 항목은 다음과 같은 딕셔너리 형태
-            "status": "success",
-            "results": 
-                        {
-                            "id": result_id : int
-                            "distance": distance : float,
-                            "song_name": song_name : str,
-                            "instrument": instrument : str,
-                            "start_sec": start_sec: float,
-                            "end_sec": end_sec: float
-                        }
-'''
 @app.post("/api/search")
 async def search_music(
+    # --- 수정: start_sec, end_sec 제거 ---
     file: UploadFile = File(...), 
-    start_sec: float = Form(...), 
-    end_sec: float = Form(...),
     instrument: str = Form(...)
 ):
     """
-    오디오 파일과 구간 정보를 받아 유사한 음악을 검색합니다.
-    (슬라이딩 윈도우 적용)
+    사용자로부터 받은 오디오 클립(이미 구간이 잘린 상태)과 악기 정보를 받아 유사한 음악을 검색합니다.
     """
     temp_filename = f"temp_{file.filename}"
     
@@ -81,26 +62,39 @@ async def search_music(
         with open(temp_filename, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
             
-        # 1. 사용자가 요청한 전체 구간의 스펙토그램을 추출
-        long_spectrogram = extract_and_transform_frame(temp_filename, instrument, start_sec, end_sec, device=DEVICE)
+        # --- 수정된 로직 ---
+        # 1. 음원 분리 (demucs)
+        stems, sr = separate_audio(temp_filename, device=DEVICE)
+        if stems is None or instrument not in stems:
+            raise HTTPException(status_code=400, detail=f"Could not separate the '{instrument}' track.")
         
+        instrumental_track = stems[instrument]
+
+        # --- 최종 수정: 스펙트로그램 생성 직전에 모노로 변환 ---
+        # separate_audio는 스테레오([2, n])를 반환하므로, 여기서 모노로 변환합니다.
+        mono_instrumental_track = torch.mean(instrumental_track, dim=0, keepdim=True)
+        # --- 수정 끝 ---
+
+        # 2. 스펙트로그램 변환
+        long_spectrogram = mel_spectrogram(mono_instrumental_track, sample_rate=sr)
         if long_spectrogram is None:
-            raise HTTPException(status_code=400, detail="Audio processing failed")
+            raise HTTPException(status_code=400, detail="Spectrogram conversion failed.")
 
         long_spectrogram = long_spectrogram.to(DEVICE)
         
-        # --- 슬라이딩 윈도우 로직 ---
+        # 3. 슬라이딩 윈도우로 여러 조각(chunk) 생성
         total_frames = long_spectrogram.shape[-1]
-        window_size = TRAIN_INPUT_FRAMES
-        stride = window_size // 2  # 윈도우를 50%씩 겹치게 이동
+        window_size = TARGET_WIDTH
+        stride = window_size // 2  # 50% overlap
 
-        # 2. 윈도우를 움직여 여러 개의 조각(chunk)을 배치로 만듦
         chunks = []
         if total_frames <= window_size:
-            # 입력이 훈련 크기보다 작거나 같으면, 그대로 사용
-            chunks.append(long_spectrogram)
+            # 입력이 5초보다 짧거나 같으면, 크기를 맞춰서 그대로 사용
+            padded_chunk = torch.zeros(1, long_spectrogram.shape[1], window_size, device=DEVICE)
+            padded_chunk[..., :total_frames] = long_spectrogram
+            chunks.append(padded_chunk)
         else:
-            # 입력이 더 길면, 슬라이딩하며 조각 추출
+            # 입력이 5초보다 길면, 슬라이딩하며 조각 추출
             for i in range(0, total_frames - window_size + 1, stride):
                 chunk = long_spectrogram[..., i:i + window_size]
                 chunks.append(chunk)
@@ -110,20 +104,20 @@ async def search_music(
 
         batch = torch.cat(chunks, dim=0)
 
-        # 3. 모델로 모든 조각을 한 번에 추론
+        if batch.dim() == 3:
+            batch = batch.unsqueeze(1)
+        
+        # --- GPU/CPU 장치 일치 ---
+        batch = batch.to(DEVICE)
+
+        # 4. 모델로 모든 조각을 한 번에 추론하고 평균내어 쿼리 벡터 생성
         with torch.no_grad():
             all_embeddings = MODEL(batch)
-
-        # 4. 추론된 모든 임베딩 벡터를 평균내어 최종 쿼리 벡터 생성
         query_vector = torch.mean(all_embeddings, dim=0, keepdim=True)
-        
-        # --------------------------
+        # --- 로직 수정 끝 ---
 
         # 5. Faiss 검색 수행
-        if SEARCH_ENGINE:
-            results = SEARCH_ENGINE.search(query_vector.cpu().numpy(), top_k=5)
-        else:
-            results = []
+        results = SEARCH_ENGINE.search(query_vector.cpu().numpy(), top_k=5)
 
         return {
             "status": "success",
