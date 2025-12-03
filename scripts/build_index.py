@@ -27,7 +27,7 @@ except ImportError as e:
     sys.exit(1)
 
 # --- 상수 정의 ---
-EMBEDDING_DIM = 512  # ResNet18 전이 학습 모델의 출력 차원
+EMBEDDING_DIM = 128  # ResNet18 전이 학습 모델의 출력 차원
 
 def build_index(data_dir, model_path, index_dir, device):
     """
