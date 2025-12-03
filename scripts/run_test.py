@@ -129,7 +129,7 @@ def main():
         print("유사한 곡을 찾지 못했습니다.")
     else:
         for res in results:
-            print(f"  - ID: {res['id']}, Distance: {res['distance']:.4f}")
+            print(f"  - ID: {res['id']}, Similarity: {res['similarity']:.4f}")
             print(f"    Song: {res['song_name']}, Instrument: {res['instrument']}")
             print(f"    Time: {res['start_sec']:.2f}s ~ {res['end_sec']:.2f}s\n")
 
