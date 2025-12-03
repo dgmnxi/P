@@ -37,7 +37,7 @@ def build_index(data_dir, model_path, index_dir, device):
 
     # --- 1. 모델 로드 ---
     print("--- 1. 모델 로딩 시작 ---")
-    model = resnet18_transfer_learning(embedding_dim=EMBEDDING_DIM)
+    model = resnet18_transfer_learning()
     model.load_state_dict(torch.load(model_path, map_location=device))
     model.to(device)
     model.eval()
