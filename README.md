@@ -4,19 +4,16 @@ This repo contains a minimal FastAPI service wrapping Demucs for music source se
 
 
 ## Endpoints
-입력 : 오디오 파일, 악기 이름, 시작 시간, 종료 시간
-출력 : 유사한 음악 리스트 top_k = 5/ 각 항목은 다음과 같은 딕셔너리 형태
-            "status": "success",
-            "results": 
-                        {
-                            "id": result_id : int
-                            "distance": distance : float,
-                            "song_name": song_name : str,
-                            "instrument": instrument : str,
-                            "start_sec": start_sec: float,
-                            "end_sec": end_sec: float
-                        }
+입력 : 오디오 파일, 악기 이름<br>
 
+API(separate)<br>
+params : file , instrument
+out : status : "success" / exception
+      separate_id : "id(uuid4)"
+
+API(recommend)
+params : id
+out : recommended json
 ## Local run (Windows PowerShell)
 ```powershell
 python -m venv .venv
