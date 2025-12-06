@@ -47,9 +47,8 @@ async def load_resources():
     else:
         raise RuntimeError("FATAL: Index or metadata file not found. Please run 'scripts/build_index.py' first.")
 
-@app.post("/api/search")
+@app.post("/separate")
 async def search_music(
-    # --- 수정: start_sec, end_sec 제거 ---
     file: UploadFile = File(...), 
     instrument: str = Form(...)
 ):
