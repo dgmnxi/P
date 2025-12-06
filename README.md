@@ -7,12 +7,12 @@ This repo contains a minimal FastAPI service wrapping Demucs for music source se
 입력 : 오디오 파일, 악기 이름<br>
 
 API(separate)<br>
-params : file , instrument
+params : file , instrument<br>
 out : status : "success" / exception
       separate_id : "id(uuid4)"
 
 API(recommend)
-params : id
+params : id<br>
 out : recommended json
 ## Local run (Windows PowerShell)
 ```powershell
