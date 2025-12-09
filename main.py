@@ -1,11 +1,13 @@
 # main.py
 import uvicorn
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, Form, HTTPException
 import torch
 import shutil
 import os
 import numpy as np
 import uuid
+import yt_dlp # 유튜브 다운로드를 위해 추가
+import torchaudio # 오디오 자르기를 위해 추가
 
 # 우리가 만든 모듈들 임포트
 from app.model import resnet18_transfer_learning
@@ -19,11 +21,16 @@ MODEL = None
 SEARCH_ENGINE = None
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 TARGET_WIDTH = 431 # 훈련 시 사용했던 스펙트로그램 너비
+TEMP_DOWNLOAD_DIR = "temp_downloads" # 다운로드 및 임시 파일을 저장할 폴더
+COOKIE_FILE = "cookies.txt" # 쿠키 파일 이름
 
 @app.on_event("startup")
 async def load_resources():
     global MODEL, SEARCH_ENGINE
     
+    # 임시 폴더 생성
+    os.makedirs(TEMP_DOWNLOAD_DIR, exist_ok=True)
+
     # 1. 모델 로드
     print("Loading AI Model...")
     MODEL = resnet18_transfer_learning().to(DEVICE)
@@ -46,41 +53,82 @@ async def load_resources():
     else:
         raise RuntimeError("FATAL: Index or metadata file not found. Please run 'scripts/build_index.py' first.")
 
-@app.post("/recommend")
+@app.post("/api/recommend")
 async def recommend_music(
-    file: UploadFile = File(...), 
-    instrument: str = Form(...)
+    youtube_url: str = Form(...), 
+    instrument: str = Form(...),
+    start_sec: float = Form(...),
+    end_sec: float = Form(...)
 ):
     """
-    사용자로부터 받은 오디오 클립(이미 구간이 잘린 상태)과 악기 정보를 받아 유사한 음악을 검색합니다.
+    유튜브 링크, 시간, 악기 정보를 받아 유사한 음악을 검색합니다.
     """
-    # 각 요청마다 고유한 임시 파일 이름 생성
-    temp_filename = f"temp_{uuid.uuid4()}_{file.filename}"
-    
+    request_id = str(uuid.uuid4())
+    download_path = os.path.join(TEMP_DOWNLOAD_DIR, f"{request_id}.%(ext)s")
+    clipped_path = os.path.join(TEMP_DOWNLOAD_DIR, f"{request_id}_clipped.wav")
+
     try:
-        # 1. 업로드된 파일을 임시 저장
-        with open(temp_filename, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+        # 1. 유튜브 오디오 다운로드
+        print(f"Downloading audio from: {youtube_url}")
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'outtmpl': download_path,
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'wav',
+            }],
+            'noplaylist': True,
+        }
+        
+        # cookies.txt 파일이 있으면 옵션에 추가
+        if os.path.exists(COOKIE_FILE):
+            print(f"Using cookie file: {COOKIE_FILE}")
+            ydl_opts['cookiefile'] = COOKIE_FILE
+        else:
+            print("Cookie file not found, proceeding without it.")
+
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            error_code = ydl.download([youtube_url])
+            if error_code != 0:
+                raise HTTPException(status_code=500, detail="Failed to download audio from YouTube.")
+        
+        # yt-dlp가 확장자를 .wav로 바꿔주므로 실제 파일 경로를 다시 확인
+        actual_download_path = os.path.join(TEMP_DOWNLOAD_DIR, f"{request_id}.wav")
+        if not os.path.exists(actual_download_path):
+             raise HTTPException(status_code=500, detail="Downloaded audio file not found.")
+
+        # 2. 오디오 파일 자르기
+        print(f"Clipping audio from {start_sec}s to {end_sec}s")
+        waveform, sr = torchaudio.load(actual_download_path)
+        start_frame = int(start_sec * sr)
+        end_frame = int(end_sec * sr)
+        clipped_waveform = waveform[:, start_frame:end_frame]
+        
+        if clipped_waveform.shape[1] == 0:
+            raise HTTPException(status_code=400, detail="The specified time range is invalid or contains no audio.")
             
-        # 2. 음원 분리 (demucs)
-        stems, sr = separate_audio(temp_filename, device=DEVICE)
+        torchaudio.save(clipped_path, clipped_waveform, sr)
+
+        # 3. 음원 분리 (demucs)
+        print(f"Separating '{instrument}' track...")
+        stems, sr_sep = separate_audio(clipped_path, device=DEVICE)
         if stems is None or instrument not in stems:
             raise HTTPException(status_code=400, detail=f"Could not separate the '{instrument}' track.")
         
         instrumental_track = stems[instrument]
 
-        # 3. 모노 변환 및 스펙트로그램 생성
+        # 4. 모노 변환 및 스펙트로그램 생성
         mono_instrumental_track = torch.mean(instrumental_track, dim=0, keepdim=True)
-        long_spectrogram = mel_spectrogram(mono_instrumental_track, sample_rate=sr)
+        long_spectrogram = mel_spectrogram(mono_instrumental_track, sample_rate=sr_sep)
         if long_spectrogram is None:
             raise HTTPException(status_code=400, detail="Spectrogram conversion failed.")
 
         long_spectrogram = long_spectrogram.to(DEVICE)
         
-        # 4. 슬라이딩 윈도우로 여러 조각(chunk) 생성
+        # 5. 슬라이딩 윈도우로 쿼리 벡터 생성
         total_frames = long_spectrogram.shape[-1]
         window_size = TARGET_WIDTH
-        stride = window_size // 2  # 50% overlap
+        stride = window_size // 2
 
         chunks = []
         if total_frames <= window_size:
@@ -96,18 +144,18 @@ async def recommend_music(
              raise HTTPException(status_code=400, detail="Could not extract any valid audio chunks.")
 
         batch = torch.cat(chunks, dim=0)
-
         if batch.dim() == 3:
             batch = batch.unsqueeze(1)
         
         batch = batch.to(DEVICE)
 
-        # 5. 모델로 모든 조각을 추론하고 평균내어 쿼리 벡터 생성
+        # 6. 모델 추론 및 쿼리 벡터 생성
         with torch.no_grad():
             all_embeddings = MODEL(batch)
         query_vector = torch.mean(all_embeddings, dim=0, keepdim=True)
 
-        # 6. Faiss 검색 수행
+        # 7. Faiss 검색 수행
+        print("Searching for similar tracks...")
         results = SEARCH_ENGINE.search(query_vector.cpu().numpy(), top_k=5)
 
         return {
@@ -120,9 +168,11 @@ async def recommend_music(
         raise HTTPException(status_code=500, detail=str(e))
     
     finally:
-        # 작업 완료 후 임시 업로드 파일 삭제
-        if os.path.exists(temp_filename):
-            os.remove(temp_filename)
+        # 작업 완료 후 모든 임시 파일 삭제
+        if 'actual_download_path' in locals() and os.path.exists(actual_download_path):
+            os.remove(actual_download_path)
+        if os.path.exists(clipped_path):
+            os.remove(clipped_path)
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
