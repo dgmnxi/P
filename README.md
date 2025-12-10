@@ -3,43 +3,13 @@
 This repo contains a minimal FastAPI service wrapping Demucs for music source separation. It supports CPU and GPU deployments and returns a ZIP of separated stems.
 
 
-## Endpoints
-입력 : 오디오 파일, 악기 이름<br>
+## Endpoints(/recommend)
+입력 : youtube_url(str),<br>
+      instrument(str),<br>
+      start_sec(float),<br>
+      end_sec(float)<br>
+      
 
-API(separate)<br>
-params : file , instrument<br>
-out : status : "success" / exception
-      separate_id : "id(uuid4)"
-
-API(recommend)
-params : id<br>
-out : recommended json
-## Local run (Windows PowerShell)
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8080
-```
-
-## Docker (CPU)
-```powershell
-# Build
-docker build -t demucs-api:cpu -f Dockerfile .
-# Run
-docker run --rm -p 8080:8080 demucs-api:cpu
-```
-
-## Docker (GPU)
-Requires an NVIDIA GPU host with the NVIDIA Container Toolkit installed.
-- Install: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html
-
-```powershell
-# Build
-docker build -t demucs-api:gpu -f Dockerfile.gpu .
-# Run with GPU access
-docker run --rm -p 8080:8080 --gpus all demucs-api:gpu
-```
 
 ## Google Cloud deployment options
 
