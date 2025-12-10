@@ -3,18 +3,12 @@
 This repo contains a minimal FastAPI service wrapping Demucs for music source separation. It supports CPU and GPU deployments and returns a ZIP of separated stems.
 
 
-## Endpoints
-입력 : 오디오 파일, 악기 이름<br>
-
-API(separate)<br>
-params : file , instrument<br>
-out : status : "success" / exception
-      separate_id : "id(uuid4)"
-
-API(recommend)
-params : id<br>
-out : recommended json
-## Local run (Windows PowerShell)
+## Endpoints(/recommend)
+입력 : youtube_url(str),
+      instrument(str),
+      start_sec(float),
+      end_sec(float)
+      
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
