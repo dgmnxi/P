@@ -53,7 +53,7 @@ async def load_resources():
     else:
         raise RuntimeError("FATAL: Index or metadata file not found. Please run 'scripts/build_index.py' first.")
 
-@app.post("/api/recommend")
+@app.post("/recommend")
 async def recommend_music(
     youtube_url: str = Form(...), 
     instrument: str = Form(...),
