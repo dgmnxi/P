@@ -67,6 +67,7 @@ async def recommend_music(request: RecommendRequest):
     """
     유튜브 링크, 시간, 악기 정보를 받아 유사한 음악을 검색합니다.
     """
+    start_time = time.time()
     request_id = str(uuid.uuid4())
     download_path = os.path.join(TEMP_DOWNLOAD_DIR, request_id)
     clipped_path = os.path.join(TEMP_DOWNLOAD_DIR, f"{request_id}_clipped.wav")
@@ -166,6 +167,11 @@ async def recommend_music(request: RecommendRequest):
             top_k=5,
             exclude_song_name=video_title
         )
+        end_time = time.time()
+        print(f"[DEBUG]Found {len(results)} similar tracks.")
+        print(f"[DEBUG]Search took {end_time - start_time:.2f} seconds.")
+        print("--- Results ---")
+        print("[DEBUG]", results)
 
         return {
             "status": "success",
