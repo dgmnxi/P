@@ -90,9 +90,10 @@ async def recommend_music(request: RecommendRequest):
             print("Cookie file not found, proceeding without it.")
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            error_code = ydl.download([request.youtube_url])
-            if error_code != 0:
-                raise HTTPException(status_code=500, detail="Failed to download audio from YouTube.")
+            info_dict = ydl.extract_info(request.youtube_url, download=True)
+            video_title = info_dict.get('title', None)
+            if not video_title:
+                raise HTTPException(status_code=500, detail="Could not extract video title.")
         
         # yt-dlp가 확장자를 .wav로 바꿔주므로 실제 파일 경로를 다시 확인
         actual_download_path = os.path.join(TEMP_DOWNLOAD_DIR, f"{request_id}.wav")
@@ -157,8 +158,12 @@ async def recommend_music(request: RecommendRequest):
         query_vector = torch.mean(all_embeddings, dim=0, keepdim=True)
 
         # 7. Faiss 검색 수행
-        print("Searching for similar tracks...")
-        results = SEARCH_ENGINE.search(query_vector.cpu().numpy(), top_k=5)
+        print(f"Searching for similar tracks, excluding '{video_title}'...")
+        results = SEARCH_ENGINE.search(
+            query_vector.cpu().numpy(), 
+            top_k=5,
+            exclude_song_name=video_title
+        )
 
         return {
             "status": "success",
