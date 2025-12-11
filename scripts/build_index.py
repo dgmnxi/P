@@ -13,6 +13,7 @@ from tqdm import tqdm
 import json
 import argparse
 from collections import defaultdict
+import re # 정규식 사용을 위해 추가
 
 # --- 경로 설정 ---
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -64,20 +65,43 @@ def build_index(data_dir, model_path, index_dir, device):
             embedding = model(tensor).cpu().numpy()
             embeddings.append(embedding)
 
-            # 메타데이터 생성
+            # --- 메타데이터 생성 로직 수정 ---
             parts = file_path.split(os.sep)
             instrument = parts[-2]
             filename = parts[-1]
-            song_name = '_'.join(filename.split('_')[:-1])
-            chunk_index = filename.split('_')[-1].replace('.pt', '')
             
-            # start_sec, end_sec 계산 (prepare_data.py 로직과 동일하게)
+            base_filename = '_'.join(filename.split('_')[:-1])
+            chunk_index = filename.split('_')[-1].replace('.pt', '')
+
+            # 1. 파일 이름에서 아티스트와 제목 분리 (기본)
+            artist = "Unknown"
+            title = base_filename
+            if ' - ' in base_filename:
+                try:
+                    artist_part, title_part = base_filename.split(' - ', 1)
+                    artist = artist_part.strip()
+                    title = title_part.strip()
+                except ValueError:
+                    pass # ' - '가 여러 개 있어도 첫 번째 것만 사용하므로 안전
+
+            # 2. 제목(title)에서 불필요한 정보 제거 (정규식 사용)
+            # (feat. ...), [MV], (Official ...), M/V, Official Video 등 제거
+            title = re.sub(r'\s*\(.*?\)|\[.*?\]', '', title).strip()
+            title = re.sub(r'(?i)\s*(ft|feat|m/v|official|video|audio|lyric|lyrics)\s*.*', '', title).strip()
+            # " 나 ' 로 시작하면 제거
+            if title.startswith('"') and title.endswith('"'):
+                title = title[1:-1]
+            if title.startswith("'") and title.endswith("'"):
+                title = title[1:-1]
+
+            # 3. 최종 메타데이터 저장
             segment_duration = 5 # 5초
             start_sec = int(chunk_index) * segment_duration
             end_sec = start_sec + segment_duration
 
             metadata[str(i)] = {
-                "song_name": song_name,
+                "artist": artist,
+                "title": title,
                 "instrument": instrument,
                 "start_sec": start_sec,
                 "end_sec": end_sec,
