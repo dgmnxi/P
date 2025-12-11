@@ -9,6 +9,7 @@ import numpy as np
 import uuid
 import yt_dlp # 유튜브 다운로드를 위해 추가
 import torchaudio # 오디오 자르기를 위해 추가
+import time
 
 # 우리가 만든 모듈들 임포트
 from app.model import resnet18_transfer_learning
@@ -71,7 +72,7 @@ async def recommend_music(request: RecommendRequest):
 
     try:
         # 1. 유튜브 오디오 다운로드
-        print(f"Downloading audio from: {request.youtube_url}")
+        print(f"[{time.time()}] Downloading audio from: {request.youtube_url}")
         ydl_opts = {
             'format': 'bestaudio/best',
             'outtmpl': download_path,
