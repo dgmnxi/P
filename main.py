@@ -22,6 +22,7 @@ class RecommendRequest(BaseModel):
     instrument: str
     start_sec: float
     end_sec: float
+    top_k: int = 5 # 클라이언트에서 top_k를 지정하지 않으면 기본값 5를 사용
 
 app = FastAPI(title="Music Timbre Search AI Server")
 
@@ -161,10 +162,10 @@ async def recommend_music(request: RecommendRequest):
         query_vector = torch.mean(all_embeddings, dim=0, keepdim=True)
 
         # 7. Faiss 검색 수행
-        print(f"Searching for similar tracks, excluding '{video_title}'...")
+        print(f"Searching for {request.top_k} similar tracks, excluding '{video_title}'...")
         results = SEARCH_ENGINE.search(
             query_vector.cpu().numpy(), 
-            top_k=5,
+            top_k=request.top_k,
             exclude_song_name=video_title
         )
         end_time = time.time()
