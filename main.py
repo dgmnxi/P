@@ -1,6 +1,7 @@
 # main.py
 import uvicorn
 from fastapi import FastAPI, Form, HTTPException
+from pydantic import BaseModel
 import torch
 import shutil
 import os
@@ -13,6 +14,12 @@ import torchaudio # 오디오 자르기를 위해 추가
 from app.model import resnet18_transfer_learning
 from app.separator import separate_audio, mel_spectrogram
 from app.search import VectorSearchEngine
+
+class RecommendRequest(BaseModel):
+    youtube_url: str
+    instrument: str
+    start_sec: float
+    end_sec: float
 
 app = FastAPI(title="Music Timbre Search AI Server")
 
@@ -54,22 +61,17 @@ async def load_resources():
         raise RuntimeError("FATAL: Index or metadata file not found. Please run 'scripts/build_index.py' first.")
 
 @app.post("/recommend")
-async def recommend_music(
-    youtube_url: str = Form(...), 
-    instrument: str = Form(...),
-    start_sec: float = Form(...),
-    end_sec: float = Form(...)
-):
+async def recommend_music(request: RecommendRequest):
     """
     유튜브 링크, 시간, 악기 정보를 받아 유사한 음악을 검색합니다.
     """
     request_id = str(uuid.uuid4())
-    download_path = os.path.join(TEMP_DOWNLOAD_DIR, f"{request_id}.%(ext)s")
+    download_path = os.path.join(TEMP_DOWNLOAD_DIR, request_id)
     clipped_path = os.path.join(TEMP_DOWNLOAD_DIR, f"{request_id}_clipped.wav")
 
     try:
         # 1. 유튜브 오디오 다운로드
-        print(f"Downloading audio from: {youtube_url}")
+        print(f"Downloading audio from: {request.youtube_url}")
         ydl_opts = {
             'format': 'bestaudio/best',
             'outtmpl': download_path,
@@ -88,7 +90,7 @@ async def recommend_music(
             print("Cookie file not found, proceeding without it.")
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            error_code = ydl.download([youtube_url])
+            error_code = ydl.download([request.youtube_url])
             if error_code != 0:
                 raise HTTPException(status_code=500, detail="Failed to download audio from YouTube.")
         
@@ -98,10 +100,10 @@ async def recommend_music(
              raise HTTPException(status_code=500, detail="Downloaded audio file not found.")
 
         # 2. 오디오 파일 자르기
-        print(f"Clipping audio from {start_sec}s to {end_sec}s")
+        print(f"Clipping audio from {request.start_sec}s to {request.end_sec}s")
         waveform, sr = torchaudio.load(actual_download_path)
-        start_frame = int(start_sec * sr)
-        end_frame = int(end_sec * sr)
+        start_frame = int(request.start_sec * sr)
+        end_frame = int(request.end_sec * sr)
         clipped_waveform = waveform[:, start_frame:end_frame]
         
         if clipped_waveform.shape[1] == 0:
@@ -110,12 +112,12 @@ async def recommend_music(
         torchaudio.save(clipped_path, clipped_waveform, sr)
 
         # 3. 음원 분리 (demucs)
-        print(f"Separating '{instrument}' track...")
+        print(f"Separating '{request.instrument}' track...")
         stems, sr_sep = separate_audio(clipped_path, device=DEVICE)
-        if stems is None or instrument not in stems:
-            raise HTTPException(status_code=400, detail=f"Could not separate the '{instrument}' track.")
+        if stems is None or request.instrument not in stems:
+            raise HTTPException(status_code=400, detail=f"Could not separate the '{request.instrument}' track.")
         
-        instrumental_track = stems[instrument]
+        instrumental_track = stems[request.instrument]
 
         # 4. 모노 변환 및 스펙트로그램 생성
         mono_instrumental_track = torch.mean(instrumental_track, dim=0, keepdim=True)
