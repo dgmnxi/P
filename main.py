@@ -166,7 +166,7 @@ async def recommend_music(request: RecommendRequest):
         results = SEARCH_ENGINE.search(
             query_vector.cpu().numpy(), 
             top_k=request.top_k,
-            exclude_song_name=video_title
+            exclude_title=video_title
         )
         end_time = time.time()
         print(f"[DEBUG]Found {len(results)} similar tracks.")
