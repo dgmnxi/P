@@ -1,6 +1,5 @@
 '''
 Faiss를 이용한 벡터 검색 엔진 구현
-
 '''
 import faiss
 import json
@@ -18,83 +17,87 @@ class VectorSearchEngine:
         with open(metadata_path, 'r', encoding='utf-8') as f:
             self.metadata = json.load(f)
             
-    def search(self, query_vector: np.ndarray, top_k: int = 5, exclude_song_name: str = None) -> list:
+    def search(self, query_vector: np.ndarray, top_k: int = 5, exclude_title: str = None) -> list:
         """
         주어진 쿼리 벡터와 가장 유사한 top_k개의 결과를 반환합니다.
-        - 특정 song_name을 결과에서 제외할 수 있습니다.
-        - 동일 곡의 연속된 구간은 합쳐서 표현합니다.
+        - 최종 결과에 동일한 곡(title)이 중복되지 않도록 합니다.
+        - 만약 한 곡 내에서 연속되는 구간이 여러 개 발견되면, 이들을 합쳐서 하나의 결과로 만듭니다.
         """
         if query_vector.ndim == 1:
             query_vector = np.expand_dims(query_vector, axis=0)
         
         faiss.normalize_L2(query_vector)
 
-        # 병합 및 필터링을 위해 충분히 많은 후보군을 검색합니다.
-        search_k = top_k * 10 
+        # 중복 제거 및 병합을 위해 충분히 많은 후보군을 검색합니다.
+        search_k = top_k * 20
         
-        similarities, ids = self.index.search(query_vector, search_k)
-        
-        # 1. 초기 후보군 생성 및 필터링
-        candidates = []
+        try:
+            similarities, ids = self.index.search(query_vector, search_k)
+        except Exception as e:
+            print(f"Faiss search error: {e}")
+            return []
+
+        # 1. 모든 후보군을 title 기준으로 그룹화
+        candidates_by_title = {}
         for i in range(len(ids[0])):
             result_id = str(ids[0][i])
-            
             if result_id not in self.metadata:
                 continue
 
             meta = self.metadata[result_id]
-            
-            # 제외할 곡 필터링
-            if exclude_song_name and meta.get("song_name") == exclude_song_name:
+            title = meta.get("title")
+
+            # 쿼리 곡 자체는 제외
+            if not title or title == exclude_title:
                 continue
+
+            if title not in candidates_by_title:
+                candidates_by_title[title] = []
             
-            candidates.append({
+            candidates_by_title[title].append({
                 "id": result_id,
                 "similarity": float(similarities[0][i]),
-                "song_name": meta.get("song_name"),
+                "artist": meta.get("artist"),
+                "title": title,
                 "instrument": meta.get("instrument"),
                 "start_sec": meta.get("start_sec"),
                 "end_sec": meta.get("end_sec"),
             })
 
-        # 2. 곡별로 그룹화 및 구간 병합
-        merged_results = {}
-        for cand in candidates:
-            key = (cand["song_name"], cand["instrument"])
-            if key not in merged_results:
-                merged_results[key] = []
+        # 2. 각 곡별로 구간 병합 수행 및 대표 결과 생성
+        merged_results = []
+        for title, segments in candidates_by_title.items():
+            # 유사도 순으로 정렬하여 가장 유사한 구간을 기준으로 삼음
+            segments.sort(key=lambda x: x['similarity'], reverse=True)
             
-            merged_results[key].append(cand)
-
-        final_results = []
-        for key, group in merged_results.items():
-            # 시작 시간 기준으로 정렬
-            group.sort(key=lambda x: x["start_sec"])
+            # 가장 유사도가 높은 구간을 대표로 설정
+            best_segment = segments[0].copy()
             
-            if not group:
-                continue
+            # 시간 순으로 재정렬하여 병합 준비
+            segments.sort(key=lambda x: x['start_sec'])
 
-            # 첫 번째 구간으로 병합 시작
-            current_merge = group[0].copy()
-
-            for i in range(1, len(group)):
-                next_item = group[i]
-                # 구간이 겹치거나 바로 연속될 경우 (약간의 오차 허용)
-                if next_item["start_sec"] <= current_merge["end_sec"] + 1.0:
-                    # 종료 시간 확장
-                    current_merge["end_sec"] = max(current_merge["end_sec"], next_item["end_sec"])
-                    # 유사도는 더 높은 값으로 갱신
-                    current_merge["similarity"] = max(current_merge["similarity"], next_item["similarity"])
+            # 병합 로직
+            merged_segment = None
+            for seg in segments:
+                if merged_segment is None:
+                    merged_segment = seg.copy()
+                    continue
+                
+                # 구간이 겹치거나 바로 연속될 경우 (1초 허용)
+                if seg['start_sec'] <= merged_segment['end_sec'] + 1.0:
+                    merged_segment['end_sec'] = max(merged_segment['end_sec'], seg['end_sec'])
                 else:
-                    # 병합된 구간을 결과에 추가하고 새 병합 시작
-                    final_results.append(current_merge)
-                    current_merge = next_item.copy()
+                    # 연속되지 않으면 병합 중단 (가장 유사한 구간 주변만 병합)
+                    break
             
-            # 마지막으로 병합된 구간 추가
-            final_results.append(current_merge)
+            # 병합된 시간 정보와 가장 높았던 유사도를 최종 결과로 사용
+            final_segment = best_segment
+            final_segment['start_sec'] = merged_segment['start_sec']
+            final_segment['end_sec'] = merged_segment['end_sec']
+            
+            merged_results.append(final_segment)
 
-        # 3. 최종 결과 정렬 및 top_k 반환
-        # 유사도가 높은 순으로 정렬
-        final_results.sort(key=lambda x: x["similarity"], reverse=True)
+        # 3. 최종 결과를 유사도 순으로 정렬하여 top_k개 반환
+        merged_results.sort(key=lambda x: x['similarity'], reverse=True)
         
-        return final_results[:top_k]
+        return merged_results[:top_k]
