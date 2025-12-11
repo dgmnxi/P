@@ -1,4 +1,5 @@
 # main.py
+from httpx import request
 import uvicorn
 from fastapi import FastAPI, Form, HTTPException
 from pydantic import BaseModel
@@ -72,8 +73,7 @@ async def recommend_music(request: RecommendRequest):
 
     try:
         # 1. 유튜브 오디오 다운로드
-        print(f"[{time.time()}] Downloading audio from: {request.youtube_url}")
-        ydl_opts = {
+            print(f"[{time.strftime('%m-%d %H:%M:%S')}] Downloading audio from: {request.youtube_url}")        ydl_opts = {
             'format': 'bestaudio/best',
             'outtmpl': download_path,
             'postprocessors': [{
