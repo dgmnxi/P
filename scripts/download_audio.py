@@ -29,6 +29,7 @@ def download_playlist(playlist_url, output_dir, audio_format='mp3'):
             '--output', output_template,
             '--print', 'filename',      # 최종 파일 경로를 표준 출력으로 인쇄
             '--ignore-errors',      # 오류 발생 시 계속 진행
+            '--download-archive', os.path.join(output_dir, 'downloaded.txt')  # 중복 다운로드 방지
         ]
 
         # --- cookies.txt 파일 확인 및 추가 ---
@@ -92,7 +93,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '--output-dir', 
         type=str, 
-        default=os.path.join(PROJECT_ROOT, "data/raw_new"),
+        default=os.path.join(PROJECT_ROOT, "data/raw"),
         help="다운로드한 오디오 파일을 저장할 디렉토리"
     )
     parser.add_argument(
