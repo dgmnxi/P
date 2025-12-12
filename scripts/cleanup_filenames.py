@@ -5,6 +5,7 @@ import musicbrainzngs
 import glob
 import re
 from tqdm import tqdm
+import time  # <--- time 모듈 추가
 
 # --- MusicBrainz API 설정 ---
 musicbrainzngs.set_useragent(
@@ -51,16 +52,18 @@ def cleanup_filenames(data_dir, apply_changes=False):
 
             top_result = result['recording-list'][0]
             
-            # --- 아티스트 이름 추출 로직 수정 ---
+            # --- 아티스트 이름 추출 로직 수정 (더욱 강화) ---
             artist_name = "Unknown"
             artist_credit = top_result.get('artist-credit')
-
-            # 1. artist-credit가 리스트인 경우 (가장 일반적)
+            
             if isinstance(artist_credit, list):
-                artist_name = " & ".join([cred.get('name', '') or cred.get('artist', {}).get('name', '') for cred in artist_credit])
-            # 2. artist-credit가 문자열인 경우
-            elif isinstance(artist_credit, str):
-                artist_name = artist_credit
+                # 리스트의 요소가 사전(dict)인 경우에만 이름을 추출
+                artist_names = [
+                    (cred.get('name', '') or cred.get('artist', {}).get('name', ''))
+                    for cred in artist_credit if isinstance(cred, dict)
+                ]
+                # 비어있지 않은 이름만 필터링하여 최종 조합
+                artist_name = " & ".join(filter(None, artist_names))
             
             if not artist_name or artist_name == "Unknown":
                  tqdm.write(f"아티스트 정보 없음: '{original_filename}'")
@@ -81,6 +84,11 @@ def cleanup_filenames(data_dir, apply_changes=False):
                 })
 
         except Exception as e:
+            # API 속도 제한(rate limit) 오류는 잠시 후 재시도
+            if isinstance(e, musicbrainzngs.NetworkError) and "503" in str(e):
+                tqdm.write("API 속도 제한. 5초 후 재시도합니다...")
+                time.sleep(5)
+                continue # 현재 파일 재시도 (루프가 복잡해지므로 일단은 건너뛰기)
             tqdm.write(f"오류 발생: '{original_filename}' 처리 중 오류 - {e}")
 
     if not rename_plan:
