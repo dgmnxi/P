@@ -149,6 +149,8 @@ async def recommend_music(request: RecommendRequest):
         )
         end_time = time.time()
         print(f"Search took {end_time - start_time:.2f} seconds. Found {len(results)} results.")
+        #-------DEBUG----------
+        print("Results:", results)
 
         return {"status": "success", "results": results}
 
