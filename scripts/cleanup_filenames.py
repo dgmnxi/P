@@ -7,16 +7,14 @@ import re
 from tqdm import tqdm
 
 # --- MusicBrainz API 설정 ---
-# API 사용을 위해 애플리케이션 정보 설정 (이름, 버전, 연락처 등 자유롭게 기재)
 musicbrainzngs.set_useragent(
     "P-Project-File-Cleaner",
     "0.1",
-    "https://github.com/dgmnxi/P" # 본인 프로젝트 주소나 이메일
+    "https://github.com/dgmnxi/P"
 )
 
 def sanitize_filename(name):
     """파일 이름에 사용할 수 없는 문자를 제거하거나 대체합니다."""
-    # Windows 및 Unix/Linux에서 일반적으로 문제가 되는 문자 제거
     return re.sub(r'[\\/*?:"<>|]', '_', name)
 
 def cleanup_filenames(data_dir, apply_changes=False):
@@ -42,31 +40,39 @@ def cleanup_filenames(data_dir, apply_changes=False):
             original_filename = os.path.basename(file_path)
             filename_no_ext, extension = os.path.splitext(original_filename)
 
-            # 1. 검색어 정제
             query = filename_no_ext.replace('NA -', '').strip()
-            query = re.sub(r'\s*\(.*?\)|\[.*?\]', '', query).strip() # (Official) 등 제거
+            query = re.sub(r'\s*\(.*?\)|\[.*?\]', '', query).strip()
 
-            # 2. MusicBrainz API 검색
-            # recording: 녹음된 곡, release: 앨범, artist: 아티스트
             result = musicbrainzngs.search_recordings(query=query, limit=1)
             
-            if not result['recording-list']:
+            if not result.get('recording-list'):
                 tqdm.write(f"결과 없음: '{original_filename}'에 대한 정보를 찾지 못했습니다.")
                 continue
 
-            # 3. 가장 정확한 결과에서 정보 추출
             top_result = result['recording-list'][0]
             
-            artist_credit = top_result.get('artist-credit', [])
-            artist_name = " & ".join([cred['artist']['name'] for cred in artist_credit])
+            # --- 아티스트 이름 추출 로직 수정 ---
+            artist_name = "Unknown"
+            artist_credit = top_result.get('artist-credit')
+
+            # 1. artist-credit가 리스트인 경우 (가장 일반적)
+            if isinstance(artist_credit, list):
+                artist_name = " & ".join([cred.get('name', '') or cred.get('artist', {}).get('name', '') for cred in artist_credit])
+            # 2. artist-credit가 문자열인 경우
+            elif isinstance(artist_credit, str):
+                artist_name = artist_credit
+            
+            if not artist_name or artist_name == "Unknown":
+                 tqdm.write(f"아티스트 정보 없음: '{original_filename}'")
+                 continue
+            # --- 로직 수정 끝 ---
+
             title = top_result.get('title', filename_no_ext)
 
-            # 4. 새 파일명 생성
             sanitized_artist = sanitize_filename(artist_name)
             sanitized_title = sanitize_filename(title)
             new_filename = f"{sanitized_artist} - {sanitized_title}{extension}"
             
-            # 변경이 필요한 경우에만 계획에 추가
             if new_filename != original_filename:
                 rename_plan.append({
                     "dir": dir_name,
@@ -77,7 +83,6 @@ def cleanup_filenames(data_dir, apply_changes=False):
         except Exception as e:
             tqdm.write(f"오류 발생: '{original_filename}' 처리 중 오류 - {e}")
 
-    # 5. 결과 출력 및 실행
     if not rename_plan:
         print("\n모든 파일명이 이미 올바릅니다. 변경할 파일이 없습니다.")
         return
@@ -103,7 +108,6 @@ def cleanup_filenames(data_dir, apply_changes=False):
 
 
 if __name__ == '__main__':
-    # --- 경로 문제 해결을 위한 절대 경로 설정 ---
     PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
     
     parser = argparse.ArgumentParser(description="MusicBrainz API를 사용하여 오디오 파일명을 정리합니다.")
