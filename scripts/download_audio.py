@@ -38,7 +38,7 @@ def download_playlist(playlist_url, output_dir, audio_format='mp3'):
         
         if os.path.exists(cookie_file):
             print(f"'{cookie_file}' 파일을 쿠키로 사용합니다.")
-            command.extend(['--cookie', cookie_file])
+            command.extend(['--cookies', cookie_file])
         else:
             print("쿠키 파일(scripts/cookies.txt)을 찾을 수 없습니다. 없이 진행합니다.")
         
