@@ -43,7 +43,6 @@ def download_audio_from_list(url_list_file, output_dir, audio_format='mp3'):
                 '--output', output_template,
                 '--print', 'filename',      # 최종 파일 경로를 표준 출력으로 인쇄
                 '--ignore-errors',
-                '--no-playlist',
                 url
             ]
             
