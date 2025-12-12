@@ -17,12 +17,15 @@ class VectorSearchEngine:
         with open(metadata_path, 'r', encoding='utf-8') as f:
             self.metadata = json.load(f)
             
-    def search(self, query_vector: np.ndarray, top_k: int = 5, exclude_title: str = None) -> list:
+    def search(self, query_vector: np.ndarray, top_k: int = 5, exclude_title: str = None, instruments: list[str] = None) -> list:
         """
         주어진 쿼리 벡터와 가장 유사한 top_k개의 결과를 반환합니다.
         - 최종 결과에 동일한 곡(title)이 중복되지 않도록 합니다.
         - 만약 한 곡 내에서 연속되는 구간이 여러 개 발견되면, 이들을 합쳐서 하나의 결과로 만듭니다.
+        - instruments가 지정된 경우, 해당 악기만 필터링합니다.
         """
+
+
         if query_vector.ndim == 1:
             query_vector = np.expand_dims(query_vector, axis=0)
         
@@ -36,6 +39,8 @@ class VectorSearchEngine:
         except Exception as e:
             print(f"Faiss search error: {e}")
             return []
+        
+
 
         # 1. 모든 후보군을 title 기준으로 그룹화
         candidates_by_title = {}
@@ -46,9 +51,14 @@ class VectorSearchEngine:
 
             meta = self.metadata[result_id]
             title = meta.get("title")
+            instrument = meta.get("instrument")
 
             # 쿼리 곡 자체는 제외
             if not title or title == exclude_title:
+                continue
+            
+            # 악기 필터링
+            if instruments and instrument not in instruments:
                 continue
 
             if title not in candidates_by_title:

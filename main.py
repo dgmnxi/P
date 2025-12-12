@@ -110,49 +110,78 @@ async def recommend_music(request: RecommendRequest):
 
         # 3. 음원 분리
         stems, sr_sep = separate_audio(clipped_path, device=DEVICE)
-        if stems is None or request.instrument not in stems:
-            raise HTTPException(status_code=400, detail=f"Could not separate the '{request.instrument}' track.")
-        instrumental_track = stems[request.instrument]
+        if stems is None:
+            raise HTTPException(status_code=400, detail="Could not separate audio tracks.")
 
-        # 4. 스펙트로그램 생성
-        mono_instrumental_track = torch.mean(instrumental_track, dim=0, keepdim=True)
-        long_spectrogram = mel_spectrogram(mono_instrumental_track, sample_rate=sr_sep)
-        if long_spectrogram is None:
-            raise HTTPException(status_code=400, detail="Spectrogram conversion failed.")
-        long_spectrogram = long_spectrogram.to(DEVICE)
-        
-        # 5. 쿼리 벡터 생성
-        total_frames = long_spectrogram.shape[-1]
-        window_size = TARGET_WIDTH
-        stride = window_size // 2
-        chunks = []
-        if total_frames <= window_size:
-            padded_chunk = torch.zeros(1, long_spectrogram.shape[1], window_size, device=DEVICE)
-            padded_chunk[..., :total_frames] = long_spectrogram
-            chunks.append(padded_chunk)
-        else:
-            for i in range(0, total_frames - window_size + 1, stride):
-                chunks.append(long_spectrogram[..., i:i + window_size])
-        if not chunks:
-             raise HTTPException(status_code=400, detail="Could not extract any valid audio chunks.")
-        batch = torch.cat(chunks, dim=0).unsqueeze(1)
-        with torch.no_grad():
-            all_embeddings = MODEL(batch)
-        query_vector = torch.mean(all_embeddings, dim=0, keepdim=True)
+        all_results = []
+        # 요청된 모든 악기에 대해 검색 수행
+        for instrument_name in request.instrument:
+            if instrument_name not in stems:
+                print(f"Warning: '{instrument_name}' track not found. Skipping.")
+                continue
 
-        # 7. Faiss 검색 수행 (정제된 제목으로 필터링)
-        print(f"Searching for {request.top_k} similar tracks, excluding '{cleaned_title}'...")
-        results = SEARCH_ENGINE.search(
-            query_vector.cpu().numpy(), 
-            top_k=request.top_k,
-            exclude_title=cleaned_title # 수정된 부분
-        )
+            instrumental_track = stems[instrument_name]
+
+            # 4. 스펙트로그램 생성
+            mono_instrumental_track = torch.mean(instrumental_track, dim=0, keepdim=True)
+            long_spectrogram = mel_spectrogram(mono_instrumental_track, sample_rate=sr_sep)
+            if long_spectrogram is None:
+                print(f"Warning: Spectrogram conversion failed for '{instrument_name}'. Skipping.")
+                continue
+            long_spectrogram = long_spectrogram.to(DEVICE)
+            
+            # 5. 쿼리 벡터 생성
+            total_frames = long_spectrogram.shape[-1]
+            window_size = TARGET_WIDTH
+            stride = window_size // 2
+            chunks = []
+            if total_frames <= window_size:
+                padded_chunk = torch.zeros(1, long_spectrogram.shape[1], window_size, device=DEVICE)
+                padded_chunk[..., :total_frames] = long_spectrogram
+                chunks.append(padded_chunk)
+            else:
+                for i in range(0, total_frames - window_size + 1, stride):
+                    chunks.append(long_spectrogram[..., i:i + window_size])
+            
+            if not chunks:
+                print(f"Warning: Could not extract valid chunks for '{instrument_name}'. Skipping.")
+                continue
+
+            batch = torch.cat(chunks, dim=0).unsqueeze(1)
+            with torch.no_grad():
+                all_embeddings = MODEL(batch)
+            query_vector = torch.mean(all_embeddings, dim=0, keepdim=True)
+
+            # 7. Faiss 검색 수행
+            print(f"Searching for instrument '{instrument_name}', excluding '{cleaned_title}'...")
+            # 검색 시 악기 필터를 사용하여 해당 악기만 검색하도록 함
+            results = SEARCH_ENGINE.search(
+                query_vector.cpu().numpy(), 
+                top_k=request.top_k * 3, # 각 악기별로 더 많은 후보를 가져옴
+                exclude_title=cleaned_title,
+                instruments=[instrument_name] # 악기 필터링
+            )
+            all_results.extend(results)
+
+        # 모든 악기 검색 결과를 종합하여 유사도 순으로 정렬
+        all_results.sort(key=lambda x: x['similarity'], reverse=True)
+
+        # 최종적으로 중복 없는 top_k개의 결과를 선택
+        final_results = []
+        seen_titles = set()
+        for res in all_results:
+            if len(final_results) >= request.top_k:
+                break
+            if res['title'] not in seen_titles:
+                final_results.append(res)
+                seen_titles.add(res['title'])
+
         end_time = time.time()
-        print(f"Search took {end_time - start_time:.2f} seconds. Found {len(results)} results.")
+        print(f"Search took {end_time - start_time:.2f} seconds. Found {len(final_results)} unique results.")
         #-------DEBUG----------
-        print("Results:", results)
+        print("Final Results:", final_results)
 
-        return {"status": "success", "results": results}
+        return {"status": "success", "results": final_results}
 
     except Exception as e:
         print(f"Error during recommendation: {e}")
