@@ -5,94 +5,89 @@ import subprocess
 from tqdm import tqdm
 import time
 
-def download_audio_from_list(url_list_file, output_dir, audio_format='mp3'):
+def download_playlist(playlist_url, output_dir, audio_format='mp3'):
     """
-    URL 목록 파일을 읽어 각 URL의 오디오를 지정된 형식과 이름으로 다운로드합니다.
-    아티스트를 찾지 못하면 파일명에 '[MANUAL_ARTIST]' 표시를 추가합니다.
+    주어진 유튜브 재생목록의 모든 오디오를 지정된 형식과 이름으로 다운로드합니다.
+    - 'scripts/cookies.txt' 파일이 있으면 자동으로 사용합니다.
+    - 아티스트를 찾지 못하면 파일명에 '[MANUAL_ARTIST]' 표시를 추가합니다.
     """
-    if not os.path.exists(url_list_file):
-        print(f"오류: URL 목록 파일 '{url_list_file}'을(를) 찾을 수 없습니다.")
-        with open(url_list_file, 'w', encoding='utf-8') as f:
-            f.write("# 여기에 유튜브 URL을 한 줄에 하나씩 입력하세요.\n")
-            f.write("https://www.youtube.com/watch?v=dQw4w9WgXcQ\n")
-        print(f"예시 파일 '{url_list_file}'을(를) 생성했습니다. URL을 채워주세요.")
-        return
-
-    with open(url_list_file, 'r', encoding='utf-8') as f:
-        urls = [line.strip() for line in f if line.strip() and not line.startswith('#')]
-
-    if not urls:
-        print(f"'{url_list_file}'에 다운로드할 URL이 없습니다.")
-        return
-
     os.makedirs(output_dir, exist_ok=True)
-    print(f"총 {len(urls)}개의 URL을 다운로드합니다. 저장 폴더: '{output_dir}'")
+    print(f"재생목록 다운로드를 시작합니다: {playlist_url}")
+    print(f"저장 폴더: '{output_dir}'")
 
-    for url in tqdm(urls, desc="오디오 다운로드 중"):
-        try:
-            # 1. yt-dlp로 다운로드 (아티스트 없으면 'NA'로 저장)
-            # 파일명 템플릿: "아티스트 - 제목.확장자"
-            output_template = os.path.join(output_dir, "%(artist,NA)s - %(title)s.%(ext)s")
+    try:
+        # 파일명 템플릿: "아티스트 - 제목.확장자"
+        # yt-dlp가 아티스트를 찾지 못하면 'NA' (Not Available)을 사용합니다.
+        output_template = os.path.join(output_dir, "%(artist,NA)s - %(title)s.%(ext)s")
 
-            command = [
-                'yt-dlp',
-                '--extract-audio',
-                '--audio-format', audio_format,
-                '--add-metadata',
-                '--embed-thumbnail',
-                '--output', output_template,
-                '--print', 'filename',      # 최종 파일 경로를 표준 출력으로 인쇄
-                '--ignore-errors',
-                url
-            ]
-            
-            # yt-dlp 실행 및 최종 파일 경로 캡처
-            result = subprocess.run(
-                command, 
-                check=True, 
-                capture_output=True, 
-                text=True, 
-                encoding='utf-8'
-            )
-            
-            downloaded_filepath = result.stdout.strip()
-            
-            # 2. 파일명 확인 및 변경
-            if os.path.exists(downloaded_filepath):
-                dir_name = os.path.dirname(downloaded_filepath)
-                base_filename = os.path.basename(downloaded_filepath)
+        command = [
+            'yt-dlp',
+            '--extract-audio',
+            '--audio-format', audio_format,
+            '--add-metadata',
+            '--embed-thumbnail',
+            '--output', output_template,
+            '--print', 'filename',      # 최종 파일 경로를 표준 출력으로 인쇄
+            '--ignore-errors',      # 오류 발생 시 계속 진행
+        ]
+
+        # --- cookies.txt 파일 확인 및 추가 ---
+        # 스크립트가 있는 디렉토리 기준으로 cookies.txt를 찾음
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        cookie_file = os.path.join(script_dir, 'cookies.txt')
+        
+        if os.path.exists(cookie_file):
+            print(f"'{cookie_file}' 파일을 쿠키로 사용합니다.")
+            command.extend(['--cookie', cookie_file])
+        else:
+            print("쿠키 파일(scripts/cookies.txt)을 찾을 수 없습니다. 없이 진행합니다.")
+        
+        # 마지막에 URL 추가
+        command.append(playlist_url)
+
+        # yt-dlp 실행 및 최종 파일 경로 캡처
+        result = subprocess.run(
+            command, 
+            check=True, 
+            capture_output=True, 
+            text=True, 
+            encoding='utf-8'
+        )
+        
+        # 출력된 모든 파일 경로에 대해 처리
+        downloaded_files = result.stdout.strip().splitlines()
+        
+        print(f"\n다운로드 완료. 총 {len(downloaded_files)}개의 파일명 후처리 작업을 시작합니다.")
+        for filepath in tqdm(downloaded_files, desc="파일명 후처리 중"):
+            if os.path.exists(filepath):
+                dir_name = os.path.dirname(filepath)
+                base_filename = os.path.basename(filepath)
 
                 if base_filename.startswith("NA - "):
-                    # "NA - " 부분을 "[MANUAL_ARTIST] - "로 변경
                     new_filename = "[MANUAL_ARTIST] - " + base_filename[len("NA - "):]
                     new_filepath = os.path.join(dir_name, new_filename)
-                    os.rename(downloaded_filepath, new_filepath)
-                    tqdm.write(f"수동 확인 필요: '{base_filename}' -> '{new_filename}'")
-            
-        except subprocess.CalledProcessError as e:
-            tqdm.write(f"실패: {url} 다운로드 중 오류 발생.")
-            tqdm.write(e.stderr)
-        except Exception as e:
-            # API 속도 제한 등 네트워크 오류 처리
-            if "503" in str(e) or "HTTP Error 429" in str(e):
-                 tqdm.write(f"API 속도 제한 감지. 10초 후 재시도합니다... ({url})")
-                 time.sleep(10)
-                 # 현재 URL을 다시 시도하기 위해 루프 카운터를 조정할 수 있으나,
-                 # 여기서는 일단 건너뛰고 다음 URL로 진행합니다.
-            else:
-                tqdm.write(f"치명적 오류: {url} 처리 중 - {e}")
+                    try:
+                        os.rename(filepath, new_filepath)
+                        tqdm.write(f"수동 확인 필요: '{base_filename}' -> '{new_filename}'")
+                    except OSError as e:
+                        tqdm.write(f"파일명 변경 실패: {e}")
+        
+    except subprocess.CalledProcessError as e:
+        print(f"\n오류: yt-dlp 실행 중 오류가 발생했습니다.")
+        print(e.stderr)
+    except Exception as e:
+        print(f"\n치명적 오류 발생: {e}")
 
-    print("\n--- 모든 다운로드 작업 완료 ---")
+    print("\n--- 모든 작업 완료 ---")
 
 if __name__ == '__main__':
     PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
     
-    parser = argparse.ArgumentParser(description="URL 목록을 기반으로 오디오 파일을 다운로드합니다.")
+    parser = argparse.ArgumentParser(description="유튜브 재생목록의 모든 오디오를 다운로드합니다.")
     parser.add_argument(
-        '--url-file', 
+        'playlist_url', 
         type=str, 
-        default='youtube_urls.txt',
-        help="다운로드할 유튜브 URL 목록이 담긴 .txt 파일 (기본값: youtube_urls.txt)"
+        help="다운로드할 유튜브 재생목록의 전체 URL"
     )
     parser.add_argument(
         '--output-dir', 
@@ -109,4 +104,4 @@ if __name__ == '__main__':
     
     args = parser.parse_args()
 
-    download_audio_from_list(args.url_file, args.output_dir, args.format)
+    download_playlist(args.playlist_url, args.output_dir, args.format)
