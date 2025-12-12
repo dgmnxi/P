@@ -19,7 +19,7 @@ from app.search import VectorSearchEngine
 
 class RecommendRequest(BaseModel):
     youtube_url: str
-    instrument: str
+    instrument: list[str]
     start_sec: float
     end_sec: float
     top_k: int = 5
