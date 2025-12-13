@@ -14,8 +14,8 @@ __pycache__/
 .idea/
 
 # 데이터 파일 
-data/raw/
-data/processed/
+data/
+
 
 # 다운로드한 도구 (압축 파일)
 tools/ffmpeg/*.zip

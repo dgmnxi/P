@@ -51,7 +51,6 @@ class TripletSpectrogramDataset(Dataset):
         for song in self.song_list:
             for instrument in self.instruments:
                 if song in self.data_map[instrument]:
-                    # 각 샘플에 (파일 경로, 곡 ID, 악기 ID)를 튜플로 저장
                     song_id = self.song_list.index(song)
                     instrument_id = self.instruments.index(instrument)
                     for path in self.data_map[instrument][song]:
@@ -70,11 +69,26 @@ class TripletSpectrogramDataset(Dataset):
         positive_list = self.data_map[anchor_instrument_name][anchor_song_name]
         positive_path = random.choice([p for p in positive_list if p != anchor_path]) if len(positive_list) > 1 else anchor_path
 
+        # Warm-up을 위한 Random Negative 샘플 선택
+        if random.random() < 0.5:
+            neg_inst_name = random.choice([i for i in self.instruments if i != anchor_instrument_name])
+            neg_song_name = random.choice(list(self.data_map[neg_inst_name].keys()))
+        else:
+            neg_inst_name = anchor_instrument_name
+            other_songs = [s for s in self.data_map[neg_inst_name].keys() if s != anchor_song_name]
+            if not other_songs: # 만약 다른 곡이 없다면 다른 악기에서 선택
+                neg_inst_name = random.choice([i for i in self.instruments if i != anchor_instrument_name])
+                neg_song_name = random.choice(list(self.data_map[neg_inst_name].keys()))
+            else:
+                neg_song_name = random.choice(other_songs)
+        
+        negative_path = random.choice(self.data_map[neg_inst_name][neg_song_name])
+
         anchor = torch.load(anchor_path)
         positive = torch.load(positive_path)
+        negative = torch.load(negative_path)
 
-        # 곡 ID와 악기 ID를 함께 반환
-        return anchor, positive, torch.tensor(anchor_song_id), torch.tensor(anchor_instrument_id)
+        return anchor, positive, negative, torch.tensor(anchor_song_id), torch.tensor(anchor_instrument_id)
 
 def main():
     parser = argparse.ArgumentParser(description="Triplet Loss로 모델을 학습합니다.")
@@ -87,6 +101,7 @@ def main():
     parser.add_argument('--epochs', type=int, default=50, help="학습할 에포크 수")
     parser.add_argument('--batch-size', type=int, default=32, help="배치 사이즈")
     parser.add_argument('--lr', type=float, default=1e-5, help="학습률")
+    parser.add_argument('--warmup-epochs', type=int, default=5, help="온라인 하드 마이닝 전, 랜덤 샘플링으로 학습할 에포크 수")
     parser.add_argument('--validation-split', type=float, default=0.1, help="검증 데이터셋 비율")
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu', help="학습에 사용할 장치")
     args = parser.parse_args()
@@ -147,50 +162,53 @@ def main():
 
     logging.info("학습을 시작합니다...")
     for epoch in range(args.epochs):
-        # --- 훈련 단계 (온라인 하드 네거티브 마이닝) ---
+        # --- Warm-up 단계와 Hard-Mining 단계 분리 ---
+        use_hard_mining = epoch >= args.warmup_epochs
+        
+        if use_hard_mining and epoch == args.warmup_epochs:
+            logging.info(f"--- Epoch {epoch+1}: Warm-up 종료. 온라인 하드 네거티브 마이닝을 시작합니다. ---")
+        elif not use_hard_mining and epoch == 0:
+            logging.info(f"--- Epoch {epoch+1}: Warm-up을 시작합니다 (총 {args.warmup_epochs} 에포크). ---")
+
+        # --- 훈련 단계 ---
         model.train()
         total_train_loss = 0
         train_triplets_found = 0
-        for anchor, positive, song_ids, _ in tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{args.epochs} [훈련]"):
-            anchor, positive = anchor.to(args.device), positive.to(args.device)
+        
+        progress_bar = tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{args.epochs} [훈련]")
+        for anchor, positive, random_negative, song_ids, _ in progress_bar:
+            anchor, positive, random_negative = anchor.to(args.device), positive.to(args.device), random_negative.to(args.device)
             
-            # (anchor, positive) 쌍의 임베딩 계산
             anchor_out = model(anchor)
             positive_out = model(positive)
-            
-            # 모든 임베딩을 하나로 모음
-            all_embeddings = torch.cat((anchor_out, positive_out), dim=0)
-            all_song_ids = torch.cat((song_ids, song_ids), dim=0)
 
-            # 거리 행렬 계산
-            dist_matrix = torch.cdist(anchor_out, all_embeddings)
+            if not use_hard_mining:
+                # Warm-up: 랜덤 네거티브 사용
+                negative_out = model(random_negative)
+            else:
+                # Hard-Mining: 배치 내에서 하드 네거티브 찾기
+                all_embeddings = torch.cat((anchor_out, positive_out), dim=0)
+                all_song_ids = torch.cat((song_ids, song_ids), dim=0)
+                dist_matrix = torch.cdist(anchor_out, all_embeddings)
 
-            # 하드 네거티브 찾기
-            hard_negatives = []
-            for i in range(anchor_out.size(0)):
-                anchor_song_id = song_ids[i]
-                
-                # 네거티브 후보: 앵커와 다른 곡 ID를 가진 모든 샘플
-                is_negative = all_song_ids != anchor_song_id
-                
-                # 앵커와 네거티브 후보들 간의 거리
-                neg_dists = dist_matrix[i][is_negative]
-                
-                if len(neg_dists) == 0: continue
+                hard_negatives = []
+                for i in range(anchor_out.size(0)):
+                    anchor_song_id = song_ids[i]
+                    is_negative = all_song_ids != anchor_song_id
+                    neg_dists = dist_matrix[i][is_negative]
+                    if len(neg_dists) == 0: continue
+                    
+                    hard_negative_idx = torch.argmin(neg_dists)
+                    hard_negatives.append(all_embeddings[is_negative][hard_negative_idx])
 
-                # 하드 네거티브: 앵커와 가장 가까운 네거티브
-                hard_negative_idx = torch.argmin(neg_dists)
-                hard_negatives.append(all_embeddings[is_negative][hard_negative_idx])
+                if not hard_negatives: continue
+                negative_out = torch.stack(hard_negatives)
 
-            if not hard_negatives:
-                continue
-            
-            negative_out = torch.stack(hard_negatives)
-            
             # Triplet Loss 계산
-            loss = loss_fn(anchor_out[:negative_out.size(0)], positive_out[:negative_out.size(0)], negative_out)
+            # negative_out의 크기에 맞춰 anchor_out과 positive_out을 슬라이싱
+            num_triplets = negative_out.size(0)
+            loss = loss_fn(anchor_out[:num_triplets], positive_out[:num_triplets], negative_out)
             
-            # 유효한 triplet (loss > 0)만으로 평균 loss 계산
             valid_triplets = loss > 0
             num_valid_triplets = valid_triplets.sum().item()
 
@@ -199,25 +217,27 @@ def main():
                 
                 optimizer.zero_grad()
                 mean_loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0) # Gradient Clipping 추가
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.step()
                 
                 total_train_loss += mean_loss.item() * num_valid_triplets
                 train_triplets_found += num_valid_triplets
-
+        
         avg_train_loss = total_train_loss / train_triplets_found if train_triplets_found > 0 else 0
 
         # --- 검증 단계 ---
         model.eval()
         total_val_loss = 0
         total_val_accuracy = 0
+        val_samples_processed = 0
         val_triplets_found = 0
         with torch.no_grad():
-            for anchor, positive, song_ids, _ in tqdm(val_dataloader, desc=f"Epoch {epoch+1}/{args.epochs} [검증]"):
-                anchor, positive = anchor.to(args.device), positive.to(args.device)
+            for anchor, positive, random_negative, song_ids, _ in tqdm(val_dataloader, desc=f"Epoch {epoch+1}/{args.epochs} [검증]"):
+                anchor, positive, random_negative = anchor.to(args.device), positive.to(args.device), random_negative.to(args.device)
                 anchor_out = model(anchor)
                 positive_out = model(positive)
 
+                # 검증 시에는 항상 하드 네거티브를 사용하여 모델의 실제 성능을 측정
                 all_embeddings = torch.cat((anchor_out, positive_out), dim=0)
                 all_song_ids = torch.cat((song_ids, song_ids), dim=0)
                 dist_matrix = torch.cdist(anchor_out, all_embeddings)
@@ -232,10 +252,10 @@ def main():
                     hard_negatives.append(all_embeddings[is_negative][hard_negative_idx])
 
                 if not hard_negatives: continue
-                
                 negative_out = torch.stack(hard_negatives)
                 
-                loss = loss_fn(anchor_out[:negative_out.size(0)], positive_out[:negative_out.size(0)], negative_out)
+                num_triplets = negative_out.size(0)
+                loss = loss_fn(anchor_out[:num_triplets], positive_out[:num_triplets], negative_out)
                 valid_triplets = loss > 0
                 num_valid_triplets = valid_triplets.sum().item()
 
@@ -243,14 +263,13 @@ def main():
                     total_val_loss += loss[valid_triplets].sum().item()
                     val_triplets_found += num_valid_triplets
 
-                # 정확도 계산 (앵커-포지티브 거리가 앵커-네거티브 거리보다 작은 경우)
-                dist_pos = torch.pairwise_distance(anchor_out[:negative_out.size(0)], positive_out[:negative_out.size(0)])
-                dist_neg = torch.pairwise_distance(anchor_out[:negative_out.size(0)], negative_out)
+                dist_pos = torch.pairwise_distance(anchor_out[:num_triplets], positive_out[:num_triplets])
+                dist_neg = torch.pairwise_distance(anchor_out[:num_triplets], negative_out)
                 total_val_accuracy += (dist_pos < dist_neg).sum().item()
+                val_samples_processed += num_triplets
 
         avg_val_loss = total_val_loss / val_triplets_found if val_triplets_found > 0 else 0
-        # 정확도는 전체 검증 샘플 중 성공한 비율로 계산
-        val_accuracy = total_val_accuracy / len(val_indices) if len(val_indices) > 0 else 0
+        val_accuracy = total_val_accuracy / val_samples_processed if val_samples_processed > 0 else 0
 
         logging.info(f"Epoch {epoch+1} 완료 | 훈련 Loss: {avg_train_loss:.4f} | 검증 Loss: {avg_val_loss:.4f} | 검증 정확도: {val_accuracy:.4f}")
 
