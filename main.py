@@ -2,6 +2,7 @@
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+from typing import Union
 import torch
 import shutil
 import os
@@ -19,7 +20,7 @@ from app.search import VectorSearchEngine
 
 class RecommendRequest(BaseModel):
     youtube_url: str
-    instrument: list[str]
+    instrument: Union[list[str], str]
     start_sec: float
     end_sec: float
     top_k: int = 5
@@ -56,6 +57,9 @@ async def load_resources():
 
 @app.post("/recommend")
 async def recommend_music(request: RecommendRequest):
+    if isinstance(request.instrument, str):
+        request.instrument = [request.instrument]
+
     start_time = time.time()
     request_id = str(uuid.uuid4())
     download_path = os.path.join(TEMP_DOWNLOAD_DIR, request_id)
