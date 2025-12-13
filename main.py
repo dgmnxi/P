@@ -1,7 +1,7 @@
 # main.py
 import uvicorn
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, validator
 from typing import Union
 import torch
 import shutil
@@ -20,10 +20,17 @@ from app.search import VectorSearchEngine
 
 class RecommendRequest(BaseModel):
     youtube_url: str
-    instrument: Union[list[str], str]
+    instrument: list[str]
     start_sec: float
     end_sec: float
     top_k: int = 5
+
+    @validator('instrument', pre=True)
+    def parse_instrument(cls, v):
+        # 입력이 문자열이면 리스트로 감싸서 반환
+        if isinstance(v, str):
+            return [v]
+        return v
 
 app = FastAPI(title="Music Timbre Search AI Server")
 
@@ -57,8 +64,6 @@ async def load_resources():
 
 @app.post("/recommend")
 async def recommend_music(request: RecommendRequest):
-    if isinstance(request.instrument, str):
-        request.instrument = [request.instrument]
 
     start_time = time.time()
     request_id = str(uuid.uuid4())
