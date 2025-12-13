@@ -86,7 +86,7 @@ def main():
     parser.add_argument('--model-dir', type=str, default=default_model_dir, help="학습된 모델을 저장할 디렉토리")
     parser.add_argument('--epochs', type=int, default=50, help="학습할 에포크 수")
     parser.add_argument('--batch-size', type=int, default=32, help="배치 사이즈")
-    parser.add_argument('--lr', type=float, default=1e-4, help="학습률")
+    parser.add_argument('--lr', type=float, default=1e-5, help="학습률")
     parser.add_argument('--validation-split', type=float, default=0.1, help="검증 데이터셋 비율")
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu', help="학습에 사용할 장치")
     args = parser.parse_args()
@@ -199,6 +199,7 @@ def main():
                 
                 optimizer.zero_grad()
                 mean_loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0) # Gradient Clipping 추가
                 optimizer.step()
                 
                 total_train_loss += mean_loss.item() * num_valid_triplets
