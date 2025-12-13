@@ -24,6 +24,7 @@ from tqdm import tqdm
 import sys
 from collections import defaultdict
 import numpy as np
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 # --- 경로 설정 ---
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -138,6 +139,7 @@ def main():
     model = resnet18_transfer_learning().to(args.device)
     loss_fn = nn.TripletMarginLoss(margin=1.0)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    scheduler = ReduceLROnPlateau(optimizer, 'min', patience=5, factor=0.5, verbose=True)
 
     best_val_loss = float('inf')
 
@@ -176,6 +178,8 @@ def main():
         val_accuracy = total_val_accuracy / len(val_dataset)
 
         logging.info(f"Epoch {epoch+1} 완료 | 훈련 Loss: {avg_train_loss:.4f} | 검증 Loss: {avg_val_loss:.4f} | 검증 정확도: {val_accuracy:.4f}")
+
+        scheduler.step(avg_val_loss)
 
         # --- 최고 성능 모델 저장 ---
         if avg_val_loss < best_val_loss:
