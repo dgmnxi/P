@@ -139,7 +139,7 @@ def main():
     model = resnet18_transfer_learning().to(args.device)
     loss_fn = nn.TripletMarginLoss(margin=1.0)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
-    scheduler = ReduceLROnPlateau(optimizer, 'min', patience=5, factor=0.5, verbose=True)
+    scheduler = ReduceLROnPlateau(optimizer, 'min', patience=5, factor=0.5)
 
     best_val_loss = float('inf')
 
