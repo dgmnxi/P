@@ -1,4 +1,10 @@
-# scripts/run_test.py
+'''
+실제 main.py의 함수 및 코드를 백엔드 서버와 통신없이 직접 테스트해보는 스크립트입니다.
+
+
+'''
+
+
 
 import argparse
 import os

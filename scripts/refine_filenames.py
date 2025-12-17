@@ -1,3 +1,21 @@
+'''
+download_audio.py 이후 실행시키는 스크립트입니다.
+
+yt-dlp로 저장된 파일이 지정된 형식 (아티스트 - 제목.mp3) 으로 되어 있지 않은 경우,
+이를 정제하는 역할을 합니다.
+
+1. 아티스트 정리: 'A, B, C - Title.mp3' -> 'A - Title.mp3'
+2. 제목 정리: 'Artist - Title (feat. X).mp3' -> 'Artist - Title.mp3'
+   (단, 'remix', 'mix'가 포함된 괄호는 유지)
+
+--dry-run 옵션을 주면 실제로 파일 이름을 변경하지 않고,
+변경될 내역만 출력합니다.
+
+** 실제 서비스에서는 사용되지 않음 **
+
+'''
+
+
 import os
 import re
 import argparse

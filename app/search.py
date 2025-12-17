@@ -1,5 +1,8 @@
 '''
 Faiss를 이용한 벡터 검색 엔진 구현
+
+timbre.index를 통한 검색을 수행
+
 '''
 import faiss
 import json

@@ -26,9 +26,14 @@ tempCodeRunnerFile.py
 # 쿠키 및 문서 파일 (개인 정보 포함)
 LICENSE.txt
 *.pptx
+*.png
 
 # OS 특정 파일
 .DS_Store
 Thumbs.db
 
-#
+#테스트 스크립트
+scripts/find_similar.py
+scripts/run_test.py
+scripts/test_topk.py
+scripts/visualize_embeddings.py

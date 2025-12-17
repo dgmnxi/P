@@ -1,4 +1,11 @@
-# c:\Users\Min\Desktop\P-Project\scripts\find_similar_pairs.py
+'''
+유사한 음원 쌍을 찾는 스크립트입니다.
+- FAISS 인덱스에서 벡터를 검색하여 유사도가 높은 쌍을 출력합니다.
+- 메타데이터 파일에서 각 벡터에 대한 정보를 조회합니다.
+
+** 테스트 파일임. 실 서비스에서는 사용되지 않음
+'''
+
 
 import faiss
 import json
