@@ -1,6 +1,6 @@
 # Demucs API (FastAPI) for Google Cloud
 
-This repo contains a minimal FastAPI service wrapping Demucs for music source separation. It supports CPU and GPU deployments and returns a ZIP of separated stems.
+This repo contains a minimal FastAPI service wrapping Demucs for music source separation. It supports CPU and GPU deployments 
 
 
 ## Endpoints(/recommend)
@@ -8,6 +8,7 @@ This repo contains a minimal FastAPI service wrapping Demucs for music source se
       instrument(str),<br>
       start_sec(float),<br>
       end_sec(float)<br>
+      top_k (int)[Optional : Default : 5] <br>
       
 
 
@@ -29,25 +30,6 @@ This repo contains a minimal FastAPI service wrapping Demucs for music source se
    - GPU: `docker build -t demucs-api:gpu -f Dockerfile.gpu . && docker run -d -p 8080:8080 --gpus all demucs-api:gpu`
 6. Open firewall rule for TCP:8080 or use a load balancer.
 
-### Option B: Cloud Run (CPU)
-- Build container: `gcloud builds submit --tag gcr.io/PROJECT_ID/demucs-api:cpu`
-- Deploy: `gcloud run deploy demucs-api --image gcr.io/PROJECT_ID/demucs-api:cpu --platform managed --region REGION --allow-unauthenticated --cpu 2 --memory 4Gi`
-- Note: GPU support on Cloud Run may be limited; prefer Compute Engine / GKE for GPU.
-
-### Option C: GKE (GPU/CPU)
-- Create a GKE cluster with GPU node pools.
-- Install NVIDIA drivers for GKE (use GPU node images).
-- Deploy as a Kubernetes Deployment + Service, with `resources.limits.nvidia.com/gpu: 1` for GPU pods.
-
-## API usage example
-```bash
-curl -X POST \
-  -F "file=@your_song.mp3" \
-  -F "model=htdemucs" \
-  -F "device=auto" \
-  -F "mp3=true" \
-  http://localhost:8080/separate --output out.zip
-```
 
 ## Notes
 - First run downloads models. Cache will persist in the container layer or volume if configured.
